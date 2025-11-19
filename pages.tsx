@@ -1,19 +1,19 @@
+
 import React, { useState, useEffect, useMemo, useCallback, useContext } from 'react';
 import { AuthContext } from './App';
-import { User, Lead, Salesperson, CalendarEvent, Database, Role, LeadActivity } from './types.ts';
+import { User, Lead, Salesperson, CalendarEvent, Database, Role, LeadActivity, Program, SalespersonWithStats } from './types.ts';
 import { 
     getLeads, getSalesTeam, getCalendarEvents, getDashboardStats, getSalesPerformance, getConversionRates,
     createLead, updateLead, deleteLead, updateSalesperson, deleteSalesperson,
     statusColors, getBirthdays, getSalesTrend, exportToPDF, exportToCSV,
-    getLeadActivities, createLeadActivity, updateUserPassword, adminCreateUser
+    getLeadActivities, createLeadActivity, updateUserPassword, adminCreateUser,
+    getPrograms, createProgram, deleteProgram, getSalesTeamPerformance, createFollowUpAppointments
 } from './services.ts';
 import {
-    Card, StatCard, Button, Modal, Spinner, LeadForm, SalespersonForm, ChangePasswordForm, AddUserForm,
-    SalesPerformanceChart, ConversionRatePieChart, SalesTrendChart, ConnectionTest, ActivityTimeline,
+    Card, StatCard, Button, Modal, Spinner, LeadForm, SalespersonForm, ChangePasswordForm, AddUserForm, AppointmentModal,
+    SalesPerformanceChart, ConversionRatePieChart, SalesTrendChart, ConnectionTest, ActivityTimeline, SalespersonPerformanceCard,
     PlusIcon, EditIcon, TrashIcon, CakeIcon, PhoneIcon, MapPinIcon, CheckCircleIcon, XCircleIcon, InfoCircleIcon,
-    UsersIcon, TeamIcon, FileDownloadIcon,
-    // FIX: Imported CalendarIcon to resolve usage error.
-    CalendarIcon
+    UsersIcon, TeamIcon, FileDownloadIcon, CalendarIcon
 } from './components.tsx';
 import { useToast } from './hooks/useToast.tsx';
 import { supabase } from './supabaseClient.ts';
@@ -23,6 +23,12 @@ type LeadUpdate = Database['public']['Tables']['leads']['Update'];
 type SalespersonInsert = Database['public']['Tables']['profiles']['Insert'];
 type SalespersonUpdate = Database['public']['Tables']['profiles']['Update'];
 
+// Helper to safely extract error messages
+const getErrorMessage = (error: any): string => {
+    if (!error) return 'เกิดข้อผิดพลาดที่ไม่ระบุสาเหตุ';
+    if (typeof error === 'string') return error;
+    return error.message || error.error_description || JSON.stringify(error);
+};
 
 // --- Auth Pages ---
 export const LoginPage: React.FC<{ 
@@ -47,8 +53,11 @@ export const LoginPage: React.FC<{
             try {
                 await auth.login(email, password);
             } catch (error: any) {
-                if (error.message.includes('Email not confirmed')) {
+                const msg = getErrorMessage(error);
+                if (msg.includes('Email not confirmed')) {
                     setLoginError('Email not confirmed');
+                } else {
+                    addToast(`เข้าสู่ระบบไม่สำเร็จ: ${msg}`, 'error');
                 }
             } finally {
                 setIsLoading(false);
@@ -159,7 +168,7 @@ export const LoginPage: React.FC<{
                     </button>
                 </div>
                  <p className="text-xs text-center text-slate-500 mt-4 px-2">
-                    <strong>หมายเหตุ:</strong> กรุณาใช้บัญชีผู้ใช้ (อีเมล/รหัสผ่าน) ที่มีอยู่จริงใน Supabase Project ของคุณ
+                    <strong>หมายเหตุ:</strong> กรุณาใช้บัญชีผู้ใช้ (อีเมล/รหัสผ่าน) ที่มีอยู่จริงในฐานข้อมูล
                 </p>
             </Card>
             <Modal
@@ -291,7 +300,7 @@ export const AdminDashboard: React.FC = () => {
             }
             addToast('Export ข้อมูลสำเร็จ!', 'success');
         } catch(error: any) {
-            addToast(`Export ข้อมูลล้มเหลว: ${error.message}`, 'error');
+            addToast(`Export ข้อมูลล้มเหลว: ${getErrorMessage(error)}`, 'error');
             console.error(error);
         }
     }
@@ -340,11 +349,11 @@ export const AdminDashboard: React.FC = () => {
                 </Card>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard title="ลีดทั้งหมด" value={stats.totalLeads.toLocaleString()} icon={<UsersIcon className="w-6 h-6"/>} />
-                <StatCard title="ลีดใหม่" value={stats.newLeads.toLocaleString()} icon={<PlusIcon className="w-6 h-6"/>} />
-                <StatCard title="ยอดขาย" value={`฿${stats.totalValue.toLocaleString()}`} icon={<span className="text-2xl font-bold">฿</span>} />
-                <StatCard title="Conversion Rate" value={`${stats.conversionRate}%`} icon={<CheckCircleIcon className="w-6 h-6"/>} />
+            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatCard title="ลีดทั้งหมด" value={stats.totalLeads.toLocaleString()} icon={<UsersIcon className="w-6 h-6"/>} theme="sky" />
+                <StatCard title="ลีดใหม่" value={stats.newLeads.toLocaleString()} icon={<PlusIcon className="w-6 h-6"/>} theme="orange" />
+                <StatCard title="ยอดขาย" value={`฿${stats.totalValue.toLocaleString()}`} icon={<span className="text-2xl font-bold">฿</span>} theme="emerald" />
+                <StatCard title="Conversion Rate" value={`${stats.conversionRate}%`} icon={<CheckCircleIcon className="w-6 h-6"/>} theme="violet" />
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                  <SalesPerformanceChart data={performanceData} />
@@ -356,26 +365,45 @@ export const AdminDashboard: React.FC = () => {
 };
 
 export const SalesDashboard: React.FC<{ user: User }> = ({ user }) => {
-     const [stats, setStats] = useState<any>(null);
-     const [conversionData, setConversionData] = useState([]);
+    const [stats, setStats] = useState<any>(null);
+    const [conversionData, setConversionData] = useState([]);
+    const [birthdays, setBirthdays] = useState<{today: Lead[], thisMonth: Lead[]}>({today: [], thisMonth: []});
+    const [isBirthdayModalOpen, setIsBirthdayModalOpen] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
-            setStats(await getDashboardStats('sales', user.id));
+            setStats(await getDashboardStats(user.role as any, user.id)); // Cast role to avoid strict type issue if 'after_care' treated differently in future
             setConversionData(await getConversionRates(user.id));
+            setBirthdays(await getBirthdays(user.id));
         }
         fetchData();
-    }, [user.id]);
+    }, [user.id, user.role]);
 
     if (!stats) return <Spinner />;
     
+    const totalBirthdays = birthdays.today.length + birthdays.thisMonth.length;
+
     return (
         <div className="space-y-6">
-            <div>
-                <h1 className="text-3xl font-bold text-slate-800">แดชบอร์ดฝ่ายขาย</h1>
-                <p className="text-slate-500">ภาพรวมข้อมูลการขายของคุณ</p>
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-3xl font-bold text-slate-800">แดชบอร์ดฝ่ายขาย</h1>
+                    <p className="text-slate-500">ภาพรวมข้อมูลการขายของคุณ</p>
+                </div>
+                <button 
+                    onClick={() => setIsBirthdayModalOpen(true)}
+                    className="relative p-2 bg-white rounded-full shadow-md hover:bg-slate-50 transition-colors border border-slate-100"
+                    title="ดูรายการวันเกิด"
+                >
+                    <CakeIcon className="w-8 h-8 text-rose-500" />
+                    {totalBirthdays > 0 && (
+                        <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-xs font-bold text-white ring-2 ring-white">
+                            {totalBirthdays}
+                        </span>
+                    )}
+                </button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard title="ลีดของฉัน" value={stats.totalLeads} icon={<UsersIcon className="w-6 h-6"/>} />
                 <StatCard title="ยังไม่ได้โทร" value={stats.uncalledLeads} icon={<PhoneIcon className="w-6 h-6"/>} />
                 <StatCard title="ยอดขายเดือนนี้" value={`฿${stats.monthlySales.toLocaleString()}`} icon={<span className="text-2xl font-bold">฿</span>} />
@@ -385,6 +413,44 @@ export const SalesDashboard: React.FC<{ user: User }> = ({ user }) => {
                 <ConversionRatePieChart data={conversionData} />
                 <BirthdayReport salespersonId={user.id} />
              </div>
+
+             <Modal
+                isOpen={isBirthdayModalOpen}
+                onClose={() => setIsBirthdayModalOpen(false)}
+                title="รายการวันเกิดลูกค้า"
+             >
+                 <div className="space-y-4">
+                    <div>
+                        <h4 className="font-bold text-rose-500 mb-2 flex items-center"><CakeIcon className="w-5 h-5 mr-2"/> วันนี้ ({birthdays.today.length})</h4>
+                        {birthdays.today.length > 0 ? (
+                            <ul className="bg-rose-50 rounded-xl p-3 space-y-2">
+                                {birthdays.today.map(l => (
+                                    <li key={l.id} className="flex justify-between text-sm">
+                                        <span className="font-medium">{l.name}</span>
+                                        <span className="text-rose-700">{l.phone}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : <p className="text-sm text-slate-500 pl-7">ไม่มีวันเกิดวันนี้</p>}
+                    </div>
+                    <div className="border-t border-slate-100 pt-4">
+                        <h4 className="font-bold text-sky-600 mb-2 flex items-center"><CalendarIcon className="w-5 h-5 mr-2"/> เดือนนี้ ({birthdays.thisMonth.length})</h4>
+                         {birthdays.thisMonth.length > 0 ? (
+                            <ul className="bg-sky-50 rounded-xl p-3 space-y-2 max-h-60 overflow-y-auto">
+                                {birthdays.thisMonth.map(l => (
+                                    <li key={l.id} className="flex justify-between text-sm border-b border-sky-100 last:border-0 pb-1 last:pb-0">
+                                        <div className="flex flex-col">
+                                            <span className="font-medium">{l.name}</span>
+                                            <span className="text-xs text-slate-400">{new Date(l.birthday!).toLocaleDateString('th-TH', {day: 'numeric', month: 'long'})}</span>
+                                        </div>
+                                        <span className="text-sky-700">{l.phone}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : <p className="text-sm text-slate-500 pl-7">ไม่มีวันเกิดในเดือนนี้</p>}
+                    </div>
+                 </div>
+             </Modal>
         </div>
     );
 };
@@ -398,7 +464,7 @@ const BirthdayReport: React.FC<{salespersonId?: string}> = ({salespersonId}) => 
 
     return (
          <Card>
-            <h3 className="font-bold mb-4 text-slate-700 flex items-center"><CakeIcon className="mr-2 text-orange-400"/>รายงานวันเกิด</h3>
+            <h3 className="font-bold mb-4 text-slate-700">รายงานวันเกิด</h3>
             <div className="grid grid-cols-2 gap-4 mb-4">
                 <StatCard title="เกิดวันนี้" value={birthdays.today.length.toString()} icon={<CakeIcon className="w-6 h-6"/>} />
                 <StatCard title="เกิดเดือนนี้" value={birthdays.thisMonth.length.toString()} icon={<CalendarIcon className="w-6 h-6"/>} />
@@ -418,7 +484,7 @@ const BirthdayReport: React.FC<{salespersonId?: string}> = ({salespersonId}) => 
 }
 
 // --- Leads Page ---
-const LeadCard: React.FC<{lead: Lead, onEdit: (lead: Lead) => void, onDelete: (id: number) => void}> = ({lead, onEdit, onDelete}) => {
+const LeadCard: React.FC<{lead: Lead, onEdit: (lead: Lead) => void, onDelete: (id: number) => void, onSchedule?: (lead: Lead) => void}> = ({lead, onEdit, onDelete, onSchedule}) => {
     const [isRecent, setIsRecent] = useState(false);
     const auth = useContext(AuthContext);
 
@@ -437,36 +503,47 @@ const LeadCard: React.FC<{lead: Lead, onEdit: (lead: Lead) => void, onDelete: (i
     }, [lead.last_update_date]);
 
     return (
-        <Card className={`relative overflow-hidden flex flex-col space-y-3 ${isRecent ? 'flash-update' : ''}`}>
-             <div className={`absolute top-0 left-0 bottom-0 w-2 ${statusColors[lead.status]}`}></div>
-             <div className="pl-4">
-                <div className="flex justify-between items-start">
-                    <div>
-                        <h3 className="font-bold text-lg text-slate-800">{lead.name}</h3>
-                        <p className="text-sm text-slate-600">{lead.program}</p>
+        <Card className={`group relative p-0 transition-all duration-300 ease-in-out hover:shadow-xl hover:-translate-y-1 ${isRecent ? 'flash-update' : ''}`}>
+             <div className={`absolute top-0 left-0 bottom-0 w-2 rounded-l-2xl ${statusColors[lead.status]}`}></div>
+             <div className="pl-6 pr-4 py-4 flex flex-col h-full">
+                
+                <div className="flex justify-between items-start mb-3">
+                    <div className="flex-1 min-w-0">
+                        <h3 className="font-bold text-lg text-slate-800 pr-2 truncate">{lead.name}</h3>
+                        {lead.program && <p className="text-sm text-slate-600 truncate">{lead.program}</p>}
                     </div>
-                    <span className={`px-2 py-1 text-xs font-semibold rounded-full text-white ${statusColors[lead.status]}`}>
+                    <span className={`px-3 py-1 text-xs font-bold rounded-full text-white shrink-0 ${statusColors[lead.status]}`}>
                         {lead.status}
                     </span>
                 </div>
-                <div className="text-sm text-slate-500 space-y-1.5 mt-2">
-                    <p className="flex items-center"><PhoneIcon className="w-4 h-4 mr-2 text-slate-400" /> {lead.phone}</p>
-                    {lead.birthday && <p className="flex items-center"><CakeIcon className="w-4 h-4 mr-2 text-slate-400" /> {new Date(lead.birthday).toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</p>}
-                    {lead.address && <p className="flex items-center"><MapPinIcon className="w-4 h-4 mr-2 text-slate-400" /> {lead.address}</p>}
+                
+                <div className="flex-grow text-sm text-slate-500 space-y-2 my-2">
+                    <p className="flex items-center"><PhoneIcon className="w-4 h-4 mr-3 text-slate-400 flex-shrink-0" /> <span className="truncate">{lead.phone}</span></p>
+                    {lead.birthday && <p className="flex items-center"><CakeIcon className="w-4 h-4 mr-3 text-slate-400 flex-shrink-0" /> {new Date(lead.birthday).toLocaleDateString('th-TH', { month: 'long', day: 'numeric' })}</p>}
+                    {lead.address && <p className="flex items-center"><MapPinIcon className="w-4 h-4 mr-3 text-slate-400 flex-shrink-0" /> <span className="line-clamp-1">{lead.address}</span></p>}
                 </div>
-                <div className="text-xs text-slate-400 pt-3 mt-3 border-t">
-                    <p>ได้รับ: {new Date(lead.received_date).toLocaleString('th-TH')}</p>
-                    <p>ผู้ดูแล: {lead.profiles?.full_name || 'N/A'}</p>
-                </div>
-                <div className="flex justify-end items-center space-x-2 mt-3">
-                    {auth?.user?.role === 'admin' && (
-                         <Button onClick={() => onDelete(lead.id)} variant="danger" className="p-2 h-9 w-9 !rounded-full">
-                            <TrashIcon className="w-4 h-4"/>
+
+                <div className="flex justify-between items-center pt-3 mt-auto border-t border-slate-200/80">
+                     <p className="text-xs text-slate-400">
+                        ผู้ดูแล: <span className="font-medium text-slate-500">{lead.profiles?.full_name || 'N/A'}</span>
+                    </p>
+                    <div className="flex items-center space-x-1">
+                         {auth?.user?.role === 'admin' && (
+                            <button onClick={() => onDelete(lead.id)} title="Delete Lead" className="opacity-0 group-hover:opacity-100 transition-opacity text-red-400 hover:text-red-600 p-2 rounded-full hover:bg-red-100">
+                                <TrashIcon className="w-5 h-5"/>
+                            </button>
+                        )}
+                        {auth?.user?.role === 'after_care' && onSchedule && (
+                             <Button onClick={() => onSchedule(lead)} variant="primary" className="!px-3 !py-1.5 text-xs font-bold !rounded-lg !bg-indigo-600 hover:!bg-indigo-700">
+                                <CalendarIcon className="w-4 h-4 mr-1"/>
+                                ตั้งนัดหมาย
+                            </Button>
+                        )}
+                        <Button onClick={() => onEdit(lead)} variant="secondary" className="!px-3 !py-1.5 text-sm font-bold !rounded-lg !bg-slate-100 group-hover:!bg-[var(--color-primary-extralight)] group-hover:text-[var(--color-primary)]">
+                            <EditIcon className="w-4 h-4 mr-1.5"/> 
+                            <span>อัปเดต</span>
                         </Button>
-                    )}
-                    <Button onClick={() => onEdit(lead)} variant="secondary" className="px-3 py-2 text-sm font-bold">
-                        <EditIcon className="w-4 h-4 mr-1.5"/> แก้ไข / อัปเดต
-                    </Button>
+                    </div>
                 </div>
             </div>
         </Card>
@@ -477,21 +554,23 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
     const [leads, setLeads] = useState<Lead[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isAppointmentModalOpen, setIsAppointmentModalOpen] = useState(false);
     const [editingLead, setEditingLead] = useState<Lead | null>(null);
+    const [schedulingLead, setSchedulingLead] = useState<Lead | null>(null);
     const [activities, setActivities] = useState<LeadActivity[]>([]);
     const [activeTab, setActiveTab] = useState<'details' | 'activity'>('details');
     const { addToast } = useToast();
 
     const fetchLeads = useCallback(async () => {
         try {
-            const data = await getLeads(user.role, user.id);
+            const data = await getLeads(user.role === 'admin' ? 'admin' : 'sales', user.role === 'admin' ? undefined : user.id);
             setLeads(data);
             if(user.role === 'sales') {
                 const unreadCount = data.filter(l => l.status === 'ใหม่' || l.status === 'ยังไม่ได้โทร').length;
                 setNotificationCount(unreadCount);
             }
         } catch (error: any) {
-            addToast(`เกิดข้อผิดพลาด: ${error.message}`, 'error');
+            addToast(`เกิดข้อผิดพลาด: ${getErrorMessage(error)}`, 'error');
         } finally {
             setIsLoading(false);
         }
@@ -544,6 +623,16 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
         setActivities([]);
     };
 
+    const handleOpenAppointmentModal = (lead: Lead) => {
+        setSchedulingLead(lead);
+        setIsAppointmentModalOpen(true);
+    };
+
+    const handleCloseAppointmentModal = () => {
+        setIsAppointmentModalOpen(false);
+        setSchedulingLead(null);
+    };
+
     const handleSaveLead = async (leadData: LeadInsert, id?: number) => {
         try {
             if (id && editingLead) {
@@ -571,7 +660,7 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
             }
             handleCloseModal();
         } catch (error: any) {
-             addToast(`บันทึกข้อมูลล้มเหลว: ${error.message}`, 'error');
+             addToast(`บันทึกข้อมูลล้มเหลว: ${getErrorMessage(error)}`, 'error');
         }
     };
 
@@ -581,7 +670,7 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
                 await deleteLead(id);
                 addToast('ลบลีดสำเร็จ', 'success');
             } catch (error: any) {
-                addToast(`ลบล้มเหลว: ${error.message}`, 'error');
+                addToast(`ลบล้มเหลว: ${getErrorMessage(error)}`, 'error');
             }
         }
     }
@@ -597,8 +686,20 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
             }
             addToast('Export ข้อมูลสำเร็จ!', 'success');
         } catch (error: any) {
-            addToast(`Export ข้อมูลล้มเหลว: ${error.message}`, 'error');
+            addToast(`Export ข้อมูลล้มเหลว: ${getErrorMessage(error)}`, 'error');
             console.error(error);
+        }
+    };
+
+    const handleCreateAppointments = async (serviceDate: string) => {
+        if (!schedulingLead) return;
+        try {
+            addToast('กำลังสร้างนัดหมาย...', 'info');
+            await createFollowUpAppointments(schedulingLead.id, user.id, serviceDate, schedulingLead.name);
+            addToast('สร้าง 5 นัดหมายติดตามผลเรียบร้อยแล้ว!', 'success');
+            handleCloseAppointmentModal();
+        } catch (error: any) {
+            addToast(`เกิดข้อผิดพลาด: ${getErrorMessage(error)}`, 'error');
         }
     };
 
@@ -617,7 +718,15 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
             {isLoading && leads.length === 0 ? <Spinner /> : (
                 leads.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                        {leads.map(lead => <LeadCard key={lead.id} lead={lead} onEdit={handleOpenModal} onDelete={handleDeleteLead}/>)}
+                        {leads.map(lead => (
+                            <LeadCard 
+                                key={lead.id} 
+                                lead={lead} 
+                                onEdit={handleOpenModal} 
+                                onDelete={handleDeleteLead}
+                                onSchedule={handleOpenAppointmentModal}
+                            />
+                        ))}
                     </div>
                 ) : (
                     <Card className="text-center py-16">
@@ -661,13 +770,21 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
                     <ActivityTimeline activities={activities} />
                 )}
             </Modal>
+            {schedulingLead && (
+                <AppointmentModal 
+                    isOpen={isAppointmentModalOpen}
+                    onClose={handleCloseAppointmentModal}
+                    leadName={schedulingLead.name}
+                    onSubmit={handleCreateAppointments}
+                />
+            )}
         </div>
     );
 };
 
 // --- Sales Team Page ---
 export const SalesTeamPage: React.FC = () => {
-    const [team, setTeam] = useState<Salesperson[]>([]);
+    const [team, setTeam] = useState<SalespersonWithStats[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
@@ -676,11 +793,11 @@ export const SalesTeamPage: React.FC = () => {
     const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
     const { addToast } = useToast();
 
-    const fetchTeam = useCallback(async () => {
+    const fetchTeamPerformance = useCallback(async () => {
         try {
-            setTeam(await getSalesTeam());
+            setTeam(await getSalesTeamPerformance());
         } catch (error: any) {
-            addToast(error.message, 'error');
+            addToast(getErrorMessage(error), 'error');
         } finally {
             setIsLoading(false);
         }
@@ -688,26 +805,39 @@ export const SalesTeamPage: React.FC = () => {
     
     useEffect(() => {
         setIsLoading(true);
-        fetchTeam();
-    }, [fetchTeam]);
+        fetchTeamPerformance();
+    }, [fetchTeamPerformance]);
 
     useEffect(() => {
-        const channel = supabase
+        const profilesChannel = supabase
             .channel('public-profiles-changes')
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'profiles' },
                 () => {
                     addToast('ข้อมูลทีมขายมีการอัปเดต...', 'info');
-                    fetchTeam();
+                    fetchTeamPerformance();
+                }
+            )
+            .subscribe();
+        
+        const leadsChannel = supabase
+            .channel('public-leads-changes-for-team-kpi')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'leads' },
+                () => {
+                    addToast('ข้อมูลลีดมีการอัปเดต กำลังคำนวณ KPI ใหม่...', 'info');
+                    fetchTeamPerformance();
                 }
             )
             .subscribe();
 
         return () => {
-            supabase.removeChannel(channel);
+            supabase.removeChannel(profilesChannel);
+            supabase.removeChannel(leadsChannel);
         };
-    }, [fetchTeam, addToast]);
+    }, [fetchTeamPerformance, addToast]);
 
 
     const handleOpenEditModal = (salesperson: Salesperson) => {
@@ -738,7 +868,17 @@ export const SalesTeamPage: React.FC = () => {
             addToast('เปลี่ยนรหัสผ่านสำเร็จ', 'success');
             handleClosePasswordModal();
         } catch (error: any) {
-            addToast(`เกิดข้อผิดพลาด: ${error.message}`, 'error');
+            const errorMessage = getErrorMessage(error);
+            // Handle specific database function error
+            if (errorMessage.includes('column "password" of relation "users" does not exist') ||
+                errorMessage.includes('relation "users" does not exist')) {
+                
+                addToast('ฟังก์ชันเปลี่ยนรหัสผ่านในฐานข้อมูลล้าสมัย', 'error');
+                addToast('ระบบต้องการการอัปเดตฐานข้อมูล กรุณาทำตามขั้นตอนในเมนู "ตั้งค่า" > "ทดสอบการตั้งค่า"', 'warning');
+                console.error('Legacy Database Function Error:', errorMessage);
+            } else {
+                addToast(`เกิดข้อผิดพลาด: ${errorMessage}`, 'error');
+            }
         }
     };
 
@@ -749,7 +889,7 @@ export const SalesTeamPage: React.FC = () => {
             addToast('อัปเดตข้อมูลสำเร็จ', 'success');
             handleCloseEditModal();
         } catch (error: any) {
-             addToast(`บันทึกล้มเหลว: ${error.message}`, 'error');
+             addToast(`บันทึกล้มเหลว: ${getErrorMessage(error)}`, 'error');
         }
     };
 
@@ -759,7 +899,7 @@ export const SalesTeamPage: React.FC = () => {
             addToast('สร้างผู้ใช้ใหม่สำเร็จ', 'success');
             setIsAddUserModalOpen(false);
         } catch (error: any) {
-            addToast(`สร้างผู้ใช้ล้มเหลว: ${error.message}`, 'error');
+            addToast(`สร้างผู้ใช้ล้มเหลว: ${getErrorMessage(error)}`, 'error');
         }
     };
 
@@ -769,7 +909,7 @@ export const SalesTeamPage: React.FC = () => {
                 await deleteSalesperson(id);
                 addToast('ลบโปรไฟล์พนักงานขายแล้ว', 'success');
             } catch (error: any) {
-                addToast(`ลบล้มเหลว: ${error.message}`, 'error');
+                addToast(`ลบล้มเหลว: ${getErrorMessage(error)}`, 'error');
             }
         }
     };
@@ -779,31 +919,30 @@ export const SalesTeamPage: React.FC = () => {
     return (
         <div className="space-y-4">
             <div className="flex justify-between items-center">
-                <h1 className="text-3xl font-bold text-slate-800">จัดการทีมขาย</h1>
+                <h1 className="text-3xl font-bold text-slate-800">ประสิทธิภาพทีมขาย (KPIs)</h1>
                 <Button onClick={() => setIsAddUserModalOpen(true)}>
                     <PlusIcon className="w-5 h-5 mr-1" /> เพิ่มผู้ใช้งาน
                 </Button>
             </div>
-            <Card>
-                <div className="divide-y divide-slate-100">
+            {team.length > 0 ? (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {team.map(s => (
-                        <div key={s.id} className="flex items-center justify-between p-4 hover:bg-slate-50 rounded-lg">
-                            <div className="flex items-center">
-                                <img src={s.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${s.full_name}`} alt={s.full_name || ''} className="w-12 h-12 rounded-full mr-4" />
-                                <div>
-                                    <p className="font-semibold text-slate-800">{s.full_name}</p>
-                                    <p className="text-sm text-slate-500">{s.email}</p>
-                                    <p className={`text-xs font-medium uppercase tracking-wider ${s.role === 'admin' ? 'text-sky-600' : 'text-orange-500'}`}>{s.role}</p>
-                                </div>
-                            </div>
-                            <div className="flex space-x-2">
-                                <Button onClick={() => handleOpenEditModal(s)} variant="secondary" className="p-2.5 !rounded-lg"><EditIcon /></Button>
-                                <Button onClick={() => handleDelete(s.id)} variant="danger" className="p-2.5 !rounded-lg"><TrashIcon /></Button>
+                        <div key={s.id} className="relative group">
+                             <SalespersonPerformanceCard salesperson={s} />
+                             <div className="absolute top-6 right-6 flex flex-col space-y-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                <Button onClick={() => handleOpenEditModal(s)} variant="secondary" className="p-2.5 !rounded-full shadow-md"><EditIcon /></Button>
+                                <Button onClick={() => handleDelete(s.id)} variant="danger" className="p-2.5 !rounded-full shadow-md"><TrashIcon /></Button>
                             </div>
                         </div>
                     ))}
                 </div>
-            </Card>
+            ) : (
+                <Card className="text-center py-16">
+                    <h3 className="text-xl font-semibold text-slate-700">ยังไม่มีทีมขาย</h3>
+                    <p className="text-slate-500 mt-2">เริ่มต้นด้วยการเพิ่มผู้ใช้งานใหม่เข้ามาในระบบ</p>
+                </Card>
+            )}
+
             <Modal isOpen={isEditModalOpen} onClose={handleCloseEditModal} title='แก้ไขข้อมูลพนักงาน'>
                 <SalespersonForm 
                     salesperson={editingSalesperson} 
@@ -830,7 +969,7 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
 
     useEffect(() => {
         setIsLoading(true);
-        getCalendarEvents(user.role, user.id).then(data => {
+        getCalendarEvents(user.role === 'admin' ? 'admin' : 'sales', user.id).then(data => {
             setEvents(data);
             setIsLoading(false);
         }).catch(err => {
@@ -902,10 +1041,96 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
 };
 
 // --- Settings Page ---
+const ProgramManagement: React.FC = () => {
+    const [programs, setPrograms] = useState<Program[]>([]);
+    const [newProgramName, setNewProgramName] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+    const { addToast } = useToast();
+
+    const fetchPrograms = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const data = await getPrograms();
+            setPrograms(data);
+        } catch (error: any) {
+            addToast(`เกิดข้อผิดพลาดในการโหลดโปรแกรม: ${getErrorMessage(error)}`, 'error');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [addToast]);
+
+    useEffect(() => {
+        fetchPrograms();
+    }, [fetchPrograms]);
+
+    const handleAddProgram = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!newProgramName.trim()) {
+            addToast('กรุณากรอกชื่อโปรแกรม', 'warning');
+            return;
+        }
+        try {
+            await createProgram(newProgramName.trim());
+            addToast('เพิ่มโปรแกรมสำเร็จ', 'success');
+            setNewProgramName('');
+            fetchPrograms(); // Refresh list
+        } catch (error: any) {
+            addToast(`เพิ่มโปรแกรมล้มเหลว: ${getErrorMessage(error)}`, 'error');
+        }
+    };
+
+    const handleDeleteProgram = async (id: number) => {
+        if (window.confirm('คุณแน่ใจหรือไม่ว่าต้องการลบโปรแกรมนี้?')) {
+            try {
+                await deleteProgram(id);
+                addToast('ลบโปรแกรมสำเร็จ', 'success');
+                fetchPrograms(); // Refresh list
+            } catch (error: any) {
+                addToast(`ลบโปรแกรมล้มเหลว: ${getErrorMessage(error)}`, 'error');
+            }
+        }
+    };
+
+    return (
+        <Card>
+            <h2 className="text-xl font-bold mb-4">จัดการโปรแกรมที่น่าสนใจ</h2>
+            <form onSubmit={handleAddProgram} className="flex gap-2 mb-4">
+                <input
+                    type="text"
+                    value={newProgramName}
+                    onChange={(e) => setNewProgramName(e.target.value)}
+                    placeholder="ชื่อโปรแกรมใหม่"
+                    className="flex-grow p-2 border rounded-lg"
+                />
+                <Button type="submit" variant="primary">
+                    <PlusIcon className="w-5 h-5 mr-1" /> เพิ่ม
+                </Button>
+            </form>
+            {isLoading ? (
+                <Spinner />
+            ) : (
+                <div className="space-y-2">
+                    {programs.length > 0 ? programs.map((program) => (
+                        <div key={program.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
+                            <span className="text-slate-700">{program.name}</span>
+                            <button onClick={() => handleDeleteProgram(program.id)} className="text-red-400 hover:text-red-600">
+                                <TrashIcon className="w-5 h-5" />
+                            </button>
+                        </div>
+                    )) : (
+                        <p className="text-slate-500 text-center py-4">ยังไม่มีโปรแกรม</p>
+                    )}
+                </div>
+            )}
+        </Card>
+    );
+};
+
 export const SettingsPage: React.FC = () => {
     return (
         <div className="space-y-6">
             <h1 className="text-3xl font-bold text-slate-800">ตั้งค่าระบบ</h1>
+            <ProgramManagement />
             <ConnectionTest/>
             <SystemTriggers/>
         </div>

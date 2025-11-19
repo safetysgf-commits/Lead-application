@@ -1,8 +1,9 @@
+
 import React, { useState, useContext } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import { AuthContext } from './App';
-import { User, Page, Lead, Salesperson, LeadStatus, ConnectionTestResult, Database, LeadActivity, Role } from './types.ts';
-import { statusColors, leadStatuses, runConnectionTest, getSalesTeam, updateUserPassword } from './services.ts';
+import { User, Page, Lead, Salesperson, LeadStatus, ConnectionTestResult, Database, LeadActivity, Role, Program, SalespersonWithStats } from './types.ts';
+import { statusColors, leadStatuses, runConnectionTest, getSalesTeam, updateUserPassword, getPrograms } from './services.ts';
 import { useToast } from './hooks/useToast.tsx';
 
 // --- Icons ---
@@ -137,34 +138,39 @@ export const Header: React.FC<{ user: User, onLogout: () => void, notificationCo
 };
 
 export const BottomNav: React.FC<{ user: User, currentPage: Page, setCurrentPage: (page: Page) => void }> = ({ user, currentPage, setCurrentPage }) => {
-    const navItems = user.role === 'admin' 
-        ? [
-            { page: 'admin-dashboard', label: 'แดชบอร์ด', icon: HomeIcon },
-            { page: 'leads', label: 'ลีด', icon: UsersIcon },
-            { page: 'team', label: 'ทีม', icon: TeamIcon },
-            { page: 'calendar', label: 'ปฏิทิน', icon: CalendarIcon },
-            { page: 'settings', label: 'ตั้งค่า', icon: CogIcon }
-        ]
-        : [
-            { page: 'sales-dashboard', label: 'แดชบอร์ด', icon: HomeIcon },
-            { page: 'leads', label: 'ลีดของฉัน', icon: UsersIcon },
-            { page: 'calendar', label: 'ปฏิทิน', icon: CalendarIcon }
-        ];
+    const adminNav = [
+        { page: 'admin-dashboard', label: 'แดชบอร์ด', icon: HomeIcon },
+        { page: 'leads', label: 'ลีด', icon: UsersIcon },
+        { page: 'team', label: 'ทีม', icon: TeamIcon },
+        { page: 'calendar', label: 'ปฏิทิน', icon: CalendarIcon },
+        { page: 'settings', label: 'ตั้งค่า', icon: CogIcon }
+    ];
+    
+    const salesNav = [
+        { page: 'sales-dashboard', label: 'แดชบอร์ด', icon: HomeIcon },
+        { page: 'leads', label: 'ลีดของฉัน', icon: UsersIcon },
+        { page: 'calendar', label: 'ปฏิทิน', icon: CalendarIcon }
+    ];
+    
+    // After Care sees similar view to sales but has different capabilities inside pages
+    const navItems = user.role === 'admin' ? adminNav : salesNav;
 
     return (
-        <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm shadow-[0_-2px_15px_-3px_rgba(0,0,0,0.05)] z-10 border-t border-slate-200">
-            <div className="flex justify-around max-w-lg mx-auto">
+        <nav className="fixed bottom-0 left-0 right-0 bg-white z-50 border-t border-slate-200 shadow-[0_-4px_20px_rgba(0,0,0,0.1)]">
+            <div className={`grid w-full max-w-lg mx-auto p-2 gap-2 ${navItems.length === 5 ? 'grid-cols-5' : 'grid-cols-3'}`}>
                 {navItems.map(item => {
                     const isActive = currentPage === item.page;
+                    const itemClasses = `flex flex-col items-center justify-center py-2 px-1 text-center transition-all duration-300 rounded-xl`;
+                    const activeClasses = 'bg-gradient-to-br from-[var(--color-primary)] to-sky-600 text-white scale-105 shadow-lg ring-2 ring-sky-100';
+                    const inactiveClasses = 'text-slate-500 hover:bg-slate-100 hover:text-slate-800';
                     return (
                         <button 
                             key={item.page}
                             onClick={() => setCurrentPage(item.page as Page)}
-                            className={`relative flex flex-col items-center justify-center w-full pt-3 pb-2 text-center transition-colors duration-300 ${isActive ? 'text-[var(--color-primary)]' : 'text-slate-500 hover:text-[var(--color-accent)]'}`}
+                            className={`${itemClasses} ${isActive ? activeClasses : inactiveClasses}`}
                         >
-                            <item.icon className="w-7 h-7 mb-1" />
-                            <span className="text-[10px] font-bold tracking-wide">{item.label}</span>
-                             {isActive && <div className="absolute top-0 left-1/2 -translate-x-1/2 h-1 w-10 bg-[var(--color-primary)] rounded-full"></div>}
+                            <item.icon className={`w-6 h-6 mb-1 ${isActive ? 'text-white' : ''}`} />
+                            <span className="text-[10px] font-bold tracking-wide truncate w-full">{item.label}</span>
                         </button>
                     )
                 })}
@@ -180,18 +186,37 @@ export const Card: React.FC<{ children: React.ReactNode, className?: string }> =
     </div>
 );
 
-export const StatCard: React.FC<{ title: string, value: string, icon: React.ReactNode, change?: string }> = ({ title, value, icon, change }) => (
-    <Card className="flex flex-col justify-between">
-        <div className="flex justify-between items-center">
-             <p className="text-md font-semibold text-slate-600">{title}</p>
-             <div className="text-slate-400">{icon}</div>
-        </div>
-        <div>
-            <p className="text-3xl font-bold text-slate-800 mt-2">{value}</p>
-            {change && <p className="text-sm text-green-500">{change}</p>}
-        </div>
-    </Card>
-);
+export const StatCard: React.FC<{ title: string, value: string, icon: React.ReactNode, change?: string, theme?: 'sky' | 'orange' | 'emerald' | 'violet' }> = ({ title, value, icon, change, theme }) => {
+    const themeClasses = {
+        sky: 'from-cyan-400 to-sky-500 text-white',
+        orange: 'from-amber-400 to-orange-500 text-white',
+        emerald: 'from-lime-400 to-emerald-500 text-white',
+        violet: 'from-fuchsia-500 to-purple-600 text-white',
+    };
+
+    const baseCardClasses = 'flex flex-col justify-between transition-all duration-300 hover:shadow-xl hover:-translate-y-1';
+    
+    // Add a slight brightness increase on hover for a subtle interactive effect
+    const themedCardClasses = theme ? `bg-gradient-to-br ${themeClasses[theme]} hover:brightness-105` : '';
+
+    const titleClasses = theme ? 'text-white/80' : 'text-slate-600';
+    const iconClasses = theme ? 'text-white/70' : 'text-slate-400';
+    const valueClasses = theme ? 'text-white' : 'text-slate-800';
+    const changeClasses = theme ? 'text-white/90' : 'text-green-500';
+
+    return (
+        <Card className={`${baseCardClasses} ${themedCardClasses}`}>
+            <div className="flex justify-between items-center">
+                 <p className={`text-sm font-semibold ${titleClasses}`}>{title}</p>
+                 <div className={iconClasses}>{icon}</div>
+            </div>
+            <div>
+                <p className={`text-2xl font-bold mt-2 ${valueClasses}`}>{value}</p>
+                {change && <p className={`text-sm ${changeClasses}`}>{change}</p>}
+            </div>
+        </Card>
+    );
+};
 
 export const Button: React.FC<{ onClick?: () => void, children: React.ReactNode, className?: string, variant?: 'primary' | 'secondary' | 'danger', type?: 'button' | 'submit', disabled?: boolean }> = ({ onClick, children, className, variant = 'primary', type = 'button', disabled = false }) => {
     const baseClasses = "px-4 py-2.5 rounded-xl font-bold transition-all duration-300 flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed shadow-sm";
@@ -245,11 +270,13 @@ type LeadFormData = Omit<Database['public']['Tables']['leads']['Insert'], 'id' |
 export const LeadForm: React.FC<{ lead?: Lead | null, onSave: (leadData: LeadFormData, id?: number) => void, onCancel: () => void }> = ({ lead, onSave, onCancel }) => {
     const auth = useContext(AuthContext);
     const [salesTeam, setSalesTeam] = React.useState<Salesperson[]>([]);
+    const [programs, setPrograms] = React.useState<Program[]>([]);
 
     React.useEffect(() => {
         if(auth?.user?.role === 'admin') {
             getSalesTeam().then(setSalesTeam);
         }
+        getPrograms().then(setPrograms);
     }, [auth?.user?.role]);
 
     const [formData, setFormData] = useState<LeadFormData>({
@@ -283,7 +310,10 @@ export const LeadForm: React.FC<{ lead?: Lead | null, onSave: (leadData: LeadFor
                 <input name="name" value={formData.name} onChange={handleChange} placeholder="ชื่อ-นามสกุล" className="w-full p-2 border rounded-lg" required />
                 <input name="phone" value={formData.phone} onChange={handleChange} placeholder="เบอร์โทร" className="w-full p-2 border rounded-lg" required />
             </div>
-            <input name="program" value={formData.program ?? ''} onChange={handleChange} placeholder="โปรแกรมที่สนใจ" className="w-full p-2 border rounded-lg" />
+             <select name="program" value={formData.program ?? ''} onChange={handleChange} className="w-full p-2 border rounded-lg">
+                <option value="">-- เลือกโปรแกรม --</option>
+                {programs.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </select>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <input name="birthday" type="date" value={formData.birthday ?? ''} onChange={handleChange} className="w-full p-2 border rounded-lg" />
                 <input name="value" type="number" value={formData.value ?? ''} onChange={handleChange} placeholder="มูลค่า (บาท)" className="w-full p-2 border rounded-lg" />
@@ -331,6 +361,7 @@ export const SalespersonForm: React.FC<{ salesperson?: Salesperson | null, onSav
             <input name="email" type="email" value={formData.email ?? ''} onChange={handleChange} placeholder="อีเมล" className="w-full p-2 border rounded-lg" disabled={!!salesperson} />
              <select name="role" value={formData.role} onChange={handleChange} className="w-full p-2 border rounded-lg">
                 <option value="sales">Sales</option>
+                <option value="after_care">After Care</option>
                 <option value="admin">Admin</option>
             </select>
             <div className="flex justify-between items-center pt-4">
@@ -374,6 +405,7 @@ export const AddUserForm: React.FC<{ onSave: (data: { fullName: string, email: s
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="รหัสผ่าน" className="w-full p-2 border rounded-lg" required />
             <select value={role} onChange={e => setRole(e.target.value as Role)} className="w-full p-2 border rounded-lg">
                 <option value="sales">ฝ่ายขาย (Sales)</option>
+                <option value="after_care">บริการหลังการขาย (After Care)</option>
                 <option value="admin">ผู้ดูแล (Admin)</option>
             </select>
             {error && <p className="text-sm text-red-600">{error}</p>}
@@ -382,6 +414,55 @@ export const AddUserForm: React.FC<{ onSave: (data: { fullName: string, email: s
                 <Button type="submit" variant="primary">สร้างผู้ใช้</Button>
             </div>
         </form>
+    );
+};
+
+export const AppointmentModal: React.FC<{
+    isOpen: boolean;
+    onClose: () => void;
+    leadName: string;
+    onSubmit: (date: string) => void;
+}> = ({ isOpen, onClose, leadName, onSubmit }) => {
+    const [serviceDate, setServiceDate] = useState('');
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        onSubmit(serviceDate);
+        setServiceDate('');
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="ตั้งนัดหมาย (After Care)">
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                    <label className="block text-sm font-medium text-slate-600 mb-1">ชื่อลูกค้า</label>
+                    <input
+                        type="text"
+                        value={leadName}
+                        disabled
+                        className="w-full p-2 border bg-slate-100 rounded-lg text-slate-500"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-600 mb-1">วันที่รับบริการ</label>
+                    <input
+                        type="date"
+                        value={serviceDate}
+                        onChange={(e) => setServiceDate(e.target.value)}
+                        required
+                        className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-sky-300"
+                    />
+                </div>
+                <p className="text-xs text-slate-500 bg-blue-50 p-2 rounded-md border border-blue-100">
+                    <InfoCircleIcon className="w-4 h-4 inline-block mr-1 -mt-0.5"/>
+                    ระบบจะสร้างนัดหมายติดตามผลให้อัตโนมัติ 5 รายการ (+1วัน, +1เดือน, +3เดือน, +6เดือน, +1ปี)
+                </p>
+                <div className="flex justify-end space-x-2 pt-2">
+                    <Button onClick={onClose} variant="secondary" type="button">ยกเลิก</Button>
+                    <Button type="submit" variant="primary">บันทึกการนัดหมาย</Button>
+                </div>
+            </form>
+        </Modal>
     );
 };
 
@@ -433,6 +514,46 @@ export const ChangePasswordForm: React.FC<{ onSave: (password: string) => void, 
                 <Button type="submit" variant="primary">บันทึกรหัสผ่าน</Button>
             </div>
         </form>
+    );
+};
+
+export const SalespersonPerformanceCard: React.FC<{ salesperson: SalespersonWithStats }> = ({ salesperson }) => {
+    return (
+        <Card className="flex flex-col h-full">
+            <div className="flex items-center mb-4">
+                <img src={salesperson.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${salesperson.full_name}`} alt={salesperson.full_name || ''} className="w-16 h-16 rounded-full mr-4 border-4 border-slate-200" />
+                <div>
+                    <h3 className="text-xl font-bold text-slate-800">{salesperson.full_name}</h3>
+                    <p className="text-sm text-slate-500">{salesperson.email}</p>
+                </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 flex-grow content-start mt-auto">
+                <div className="bg-sky-50 p-3 rounded-lg text-center">
+                    <p className="text-xs font-semibold text-sky-700">ยอดขายรวม</p>
+                    <p className="text-lg font-bold text-sky-900">฿{salesperson.totalSales.toLocaleString()}</p>
+                </div>
+                 <div className="bg-emerald-50 p-3 rounded-lg text-center">
+                    <p className="text-xs font-semibold text-emerald-700">Conversion Rate</p>
+                    <p className="text-lg font-bold text-emerald-900">{salesperson.conversionRate}%</p>
+                </div>
+                <div className="bg-slate-50 p-3 rounded-lg text-center">
+                    <p className="text-xs font-semibold text-slate-600">ลีดทั้งหมด</p>
+                    <p className="text-lg font-bold text-slate-800">{salesperson.totalLeads}</p>
+                </div>
+                <div className="bg-green-50 p-3 rounded-lg text-center">
+                    <p className="text-xs font-semibold text-green-700">สำเร็จ</p>
+                    <p className="text-lg font-bold text-green-900">{salesperson.wonLeads}</p>
+                </div>
+                <div className="bg-red-50 p-3 rounded-lg text-center">
+                    <p className="text-xs font-semibold text-red-700">ยกเลิก</p>
+                    <p className="text-lg font-bold text-red-900">{salesperson.lostLeads}</p>
+                </div>
+                <div className="bg-orange-50 p-3 rounded-lg text-center">
+                    <p className="text-xs font-semibold text-orange-700">ยังไม่ได้โทร</p>
+                    <p className="text-lg font-bold text-orange-900">{salesperson.uncalledLeads}</p>
+                </div>
+            </div>
+        </Card>
     );
 };
 

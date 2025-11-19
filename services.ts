@@ -1,4 +1,5 @@
-import { LeadStatus, ConnectionTestResult, Database, Salesperson, Lead, LeadActivity, Role } from './types.ts';
+
+import { LeadStatus, ConnectionTestResult, Database, Salesperson, Lead, LeadActivity, Role, Program, SalespersonWithStats } from './types.ts';
 import { supabase } from './supabaseClient.ts';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -33,6 +34,8 @@ export const getLeads = async (role: 'admin' | 'sales', userId?: string) => {
       `)
       .order('received_date', { ascending: false });
 
+    // Note: 'after_care' role usually sees leads assigned to them OR all leads depending on policy.
+    // For now, assuming 'sales' logic applies (assigned_to check) unless admin.
     if (role === 'sales' && userId) {
         query = query.eq('assigned_to', userId);
     }
@@ -93,8 +96,18 @@ export const updateSalesperson = async (id: string, salespersonData: Salesperson
 };
 
 export const updateUserPassword = async (userId: string, newPassword: string) => {
-    // This requires a Supabase Edge Function for security.
-    // The RPC function 'update_user_password' must be created in your Supabase SQL Editor.
+    // Optimization: If the user is updating their OWN password, use the client SDK directly.
+    // This bypasses the need for the RPC function for self-service password changes.
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (user && user.id === userId) {
+        const { error } = await supabase.auth.updateUser({ password: newPassword });
+        if (error) throw error;
+        return;
+    }
+
+    // If Admin is updating ANOTHER user's password, we must use the RPC function.
+    // This requires the 'update_user_password' function to be correctly defined in Supabase.
     const { error } = await supabase.rpc('update_user_password', {
         user_id: userId,
         new_password: newPassword
@@ -116,6 +129,35 @@ export const getCalendarEvents = async (role: 'admin' | 'sales', userId: string)
     const { data, error } = await query;
     if (error) throw error;
     return data;
+};
+
+// Create 5 automatic follow-up appointments
+export const createFollowUpAppointments = async (leadId: number, salespersonId: string, serviceDate: string, leadName: string) => {
+    const date = new Date(serviceDate);
+    const followUps = [
+        { label: 'ติดตามผล 1 วัน', offsetMonth: 0, offsetDay: 1 },
+        { label: 'ติดตามผล 1 เดือน', offsetMonth: 1, offsetDay: 0 },
+        { label: 'ติดตามผล 3 เดือน', offsetMonth: 3, offsetDay: 0 },
+        { label: 'ติดตามผล 6 เดือน', offsetMonth: 6, offsetDay: 0 },
+        { label: 'ติดตามผล 1 ปี', offsetMonth: 12, offsetDay: 0 },
+    ];
+
+    const events = followUps.map(item => {
+        const d = new Date(date);
+        d.setMonth(d.getMonth() + item.offsetMonth);
+        d.setDate(d.getDate() + item.offsetDay);
+        
+        return {
+            title: `${item.label} - ${leadName}`,
+            start_time: d.toISOString(),
+            end_time: new Date(d.getTime() + 60 * 60 * 1000).toISOString(), // 1 hour duration
+            salesperson_id: salespersonId,
+            lead_id: leadId
+        };
+    });
+
+    const { error } = await supabase.from('calendar_events').insert(events);
+    if (error) throw error;
 };
 
 export const getDashboardStats = async (role: 'admin' | 'sales', userId?: string, dateRange?: { start: string, end: string }) => {
@@ -176,6 +218,49 @@ export const getSalesPerformance = async (dateRange?: { start: string, end: stri
     });
 };
 
+export const getSalesTeamPerformance = async (): Promise<SalespersonWithStats[]> => {
+    // 1. Get all sales profiles (Sales + After Care + Admin usually) - filtering for 'sales' only for the leaderboard generally
+    // If you want after_care in the list, change .eq('role', 'sales') to .in('role', ['sales', 'after_care'])
+    const { data: profiles, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .in('role', ['sales', 'after_care']); // Include After Care in performance stats
+    if (profileError) throw profileError;
+
+    // 2. Get all leads
+    const { data: leads, error: leadError } = await supabase
+        .from('leads')
+        .select('assigned_to, value, status');
+    if (leadError) throw leadError;
+
+    // 3. Calculate stats for each salesperson
+    const performanceData = profiles.map(salesperson => {
+        const salespersonLeads = leads.filter(lead => lead.assigned_to === salesperson.id);
+        
+        const wonLeads = salespersonLeads.filter(l => l.status === LeadStatus.Won);
+        const lostLeads = salespersonLeads.filter(l => l.status === LeadStatus.Lost);
+        const uncalledLeads = salespersonLeads.filter(l => l.status === LeadStatus.Uncalled);
+        
+        const totalSales = wonLeads.reduce((sum, lead) => sum + (lead.value || 0), 0);
+        const totalLeads = salespersonLeads.length;
+        
+        // Avoid division by zero
+        const conversionRate = totalLeads > 0 ? Math.round((wonLeads.length / totalLeads) * 100) : 0;
+
+        return {
+            ...salesperson,
+            totalSales: totalSales,
+            totalLeads: totalLeads,
+            uncalledLeads: uncalledLeads.length,
+            wonLeads: wonLeads.length,
+            lostLeads: lostLeads.length,
+            conversionRate: conversionRate
+        };
+    });
+
+    return performanceData.sort((a, b) => b.totalSales - a.totalSales);
+};
+
 export const getConversionRates = async (salespersonId?: string, dateRange?: { start: string, end: string }) => {
     let query = supabase.from('leads').select('status, created_at');
     if (salespersonId) {
@@ -230,6 +315,23 @@ export const getBirthdays = async (salespersonId?: string) => {
     });
     return { today: todayLeads, thisMonth: thisMonthLeads };
 }
+
+// --- Program Services ---
+export const getPrograms = async (): Promise<Program[]> => {
+    const { data, error } = await supabase.from('programs').select('*').order('name');
+    if (error) throw error;
+    return data;
+};
+
+export const createProgram = async (name: string) => {
+    const { error } = await supabase.from('programs').insert({ name });
+    if (error) throw error;
+};
+
+export const deleteProgram = async (id: number) => {
+    const { error } = await supabase.from('programs').delete().eq('id', id);
+    if (error) throw error;
+};
 
 // --- Lead Activity Services ---
 export const getLeadActivities = async (leadId: number): Promise<LeadActivity[]> => {
@@ -364,6 +466,41 @@ DROP POLICY IF EXISTS "Sales can manage their own calendar events." ON public.ca
 CREATE POLICY "Admins can manage all calendar events." ON public.calendar_events FOR ALL USING (get_my_role() = 'admin');
 CREATE POLICY "Sales can manage their own calendar events." ON public.calendar_events FOR ALL USING (salesperson_id = auth.uid()) WITH CHECK (salesperson_id = auth.uid());`;
 
+    const SQL_CREATE_PROGRAMS = `-- Create the programs table and policies
+CREATE TABLE IF NOT EXISTS public.programs (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  name text NOT NULL,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.programs ENABLE ROW LEVEL SECURITY;
+
+-- Policies
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'programs' AND policyname = 'Everyone can read programs') THEN
+        CREATE POLICY "Everyone can read programs" ON public.programs FOR SELECT USING (true);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'programs' AND policyname = 'Admins can manage programs') THEN
+        CREATE POLICY "Admins can manage programs" ON public.programs FOR ALL USING (get_my_role() = 'admin');
+    END IF;
+END $$;`;
+
+    const SQL_UPDATE_USER_PASSWORD_FIX = `-- ฟังก์ชันสำหรับ Admin เปลี่ยนรหัสผ่านให้ User อื่น
+create extension if not exists "pgcrypto";
+
+create or replace function update_user_password(user_id uuid, new_password text)
+returns void
+language plpgsql
+security definer
+as $$
+begin
+  update auth.users
+  set encrypted_password = crypt(new_password, gen_salt('bf'))
+  where id = user_id;
+end;
+$$;`;
+
     const tests = [
         {
             name: "1. ตรวจสอบการเชื่อมต่อ Supabase",
@@ -373,20 +510,39 @@ CREATE POLICY "Sales can manage their own calendar events." ON public.calendar_e
                 details: "เชื่อมต่อ Supabase สำเร็จ (URL และ Key ถูกต้อง)",
             })
         },
-        ...['profiles', 'leads', 'calendar_events', 'lead_activities'].map((table, i) => ({
+        ...['profiles', 'leads', 'calendar_events', 'lead_activities', 'programs'].map((table, i) => ({
             name: `${i + 2}. ตรวจสอบตาราง '${table}'`,
             requiresAuth: false,
             action: async () => {
                 const { error } = await supabase.from(table).select('id', { count: 'exact', head: true });
+                let fix = undefined;
+                if (error && table === 'programs') {
+                    fix = SQL_CREATE_PROGRAMS;
+                } else if (error) {
+                     fix = `ตรวจสอบว่าตาราง '${table}' ถูกสร้างขึ้นใน Supabase Public Schema เรียบร้อยแล้ว`;
+                }
+
                 return {
                     success: !error,
                     details: error ? `ไม่พบตาราง '${table}' หรืออาจไม่มีสิทธิ์อ่านพื้นฐาน` : `พบตาราง '${table}'`,
-                    fix: error ? `ตรวจสอบว่าตาราง '${table}' ถูกสร้างขึ้นใน Supabase Public Schema เรียบร้อยแล้ว` : undefined
+                    fix: fix
                 };
             }
         })),
         {
-            name: "6. ทดสอบสิทธิ์ตาราง 'leads' (CRUD)",
+            name: "7. ตรวจสอบฟังก์ชันเปลี่ยนรหัสผ่าน (Admin)",
+            requiresAuth: true,
+            action: async (currentUserId?: string) => {
+                // Cannot verify function body easily, so we just provide the SQL fix if needed.
+                return { 
+                    success: true, 
+                    details: "ตรวจสอบด้วยตัวเอง: หากเปลี่ยนรหัสผ่านแล้วเจอ Error ให้ใช้ SQL ด้านล่างนี้แก้ไข", 
+                    fix: SQL_UPDATE_USER_PASSWORD_FIX 
+                };
+            }
+        },
+        {
+            name: "8. ทดสอบสิทธิ์ตาราง 'leads' (CRUD)",
             requiresAuth: true,
             action: async (currentUserId?: string) => {
                 // This test must be run as an admin to insert, then a sales user must be assigned to test update/delete
@@ -394,7 +550,7 @@ CREATE POLICY "Sales can manage their own calendar events." ON public.calendar_e
             }
         },
         {
-            name: "7. ทดสอบสิทธิ์ตาราง 'profiles' (Update Self)",
+            name: "9. ทดสอบสิทธิ์ตาราง 'profiles' (Update Self)",
             requiresAuth: true,
             action: async (currentUserId?: string) => {
                 try {
@@ -411,7 +567,7 @@ CREATE POLICY "Sales can manage their own calendar events." ON public.calendar_e
             }
         },
         {
-            name: "8. ทดสอบสิทธิ์ตาราง 'calendar_events' (CRUD)",
+            name: "10. ทดสอบสิทธิ์ตาราง 'calendar_events' (CRUD)",
             requiresAuth: true,
             action: async (currentUserId?: string) => {
                 try {

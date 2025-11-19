@@ -1,4 +1,5 @@
-export type Role = 'admin' | 'sales';
+
+export type Role = 'admin' | 'sales' | 'after_care';
 
 export interface User {
   id: string;
@@ -23,6 +24,16 @@ export type Lead = Database['public']['Tables']['leads']['Row'] & {
 export type Salesperson = Database['public']['Tables']['profiles']['Row'];
 export type CalendarEvent = Database['public']['Tables']['calendar_events']['Row'];
 export type LeadActivity = Database['public']['Tables']['lead_activities']['Row'];
+export type Program = Database['public']['Tables']['programs']['Row'];
+
+export type SalespersonWithStats = Salesperson & {
+  totalSales: number;
+  totalLeads: number;
+  uncalledLeads: number;
+  wonLeads: number;
+  lostLeads: number;
+  conversionRate: number;
+};
 
 
 export type Page = 'admin-dashboard' | 'sales-dashboard' | 'leads' | 'team' | 'calendar' | 'settings';
@@ -194,6 +205,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      programs: {
+        Row: {
+          id: number
+          name: string
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          name: string
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          name?: string
+          created_at?: string
+        }
+        Relationships: []
       }
       profiles: {
         Row: {
