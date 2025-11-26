@@ -665,6 +665,20 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
         }
     };
 
+    const handleExportExcel = () => {
+        if (leads.length === 0) {
+            addToast('ไม่มีข้อมูลสำหรับ Export', 'warning');
+            return;
+        }
+        addToast('กำลังดาวน์โหลดไฟล์ Excel...', 'info');
+        try {
+            exportToCSV(leads);
+            addToast('ดาวน์โหลดสำเร็จ', 'success');
+        } catch (error: any) {
+            addToast(`เกิดข้อผิดพลาด: ${getErrorMessage(error)}`, 'error');
+        }
+    };
+
     const handleCreateAppointments = async (serviceDate: string) => {
         if (!schedulingLead) return;
         try {
@@ -683,11 +697,16 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
                 <h1 className="text-3xl font-bold text-slate-800">
                     {user.role === 'admin' ? 'จัดการลีดทั้งหมด' : 'ลีดของฉัน'}
                 </h1>
-                {user.role === 'admin' && (
-                    <Button onClick={() => handleOpenModal()}>
-                        <PlusIcon className="w-5 h-5 mr-1" /> เพิ่มลีดใหม่
+                <div className="flex gap-2">
+                    <Button onClick={handleExportExcel} variant="secondary">
+                        <FileDownloadIcon className="w-5 h-5 mr-1" /> Export Excel
                     </Button>
-                )}
+                    {user.role === 'admin' && (
+                        <Button onClick={() => handleOpenModal()}>
+                            <PlusIcon className="w-5 h-5 mr-1" /> เพิ่มลีดใหม่
+                        </Button>
+                    )}
+                </div>
             </div>
             {isLoading && leads.length === 0 ? <Spinner /> : (
                 leads.length > 0 ? (
