@@ -14,7 +14,7 @@ import {
     Card, StatCard, Button, Modal, Spinner, LeadForm, SalespersonForm, ChangePasswordForm, AddUserForm, AppointmentModal,
     SalesPerformanceChart, ConversionRatePieChart, SalesTrendChart, ConnectionTest, ActivityTimeline, SalespersonPerformanceCard,
     PlusIcon, EditIcon, TrashIcon, CakeIcon, PhoneIcon, MapPinIcon, CheckCircleIcon, XCircleIcon, InfoCircleIcon,
-    UsersIcon, TeamIcon, FileDownloadIcon, CalendarIcon
+    UsersIcon, TeamIcon, FileDownloadIcon, CalendarIcon, ClockIcon
 } from './components.tsx';
 import { useToast } from './hooks/useToast.tsx';
 import { supabase } from './supabaseClient.ts';
@@ -1020,6 +1020,8 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
     const [events, setEvents] = useState<any[]>([]); // Using 'any' to accommodate mixed types (appointments, bookings, birthdays)
     const [currentDate, setCurrentDate] = useState(new Date());
     const [isLoading, setIsLoading] = useState(true);
+    const [selectedEvent, setSelectedEvent] = useState<any>(null);
+    const [isEventDetailsOpen, setIsEventDetailsOpen] = useState(false);
 
     useEffect(() => {
         setIsLoading(true);
@@ -1055,6 +1057,11 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
             return newDate;
         })
     }
+
+    const handleEventClick = (event: any) => {
+        setSelectedEvent(event);
+        setIsEventDetailsOpen(true);
+    };
     
     return (
         <div className="space-y-4">
@@ -1080,15 +1087,19 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
                                     <div className="text-xs mt-1 space-y-1 overflow-y-auto flex-grow custom-scrollbar">
                                         {dailyEvents.map(event => {
                                             // Determine style based on event type
-                                            let bgClass = "bg-sky-100 text-sky-800 border-sky-200";
+                                            let bgClass = "bg-sky-100 text-sky-800 border-sky-200 hover:bg-sky-200";
                                             if (event.type === 'booking') {
-                                                bgClass = "bg-green-100 text-green-800 border-green-200";
+                                                bgClass = "bg-green-100 text-green-800 border-green-200 hover:bg-green-200";
                                             } else if (event.type === 'birthday') {
-                                                bgClass = "bg-pink-100 text-pink-800 border-pink-200";
+                                                bgClass = "bg-pink-100 text-pink-800 border-pink-200 hover:bg-pink-200";
                                             }
 
                                             return (
-                                                <div key={event.id} className={`${bgClass} p-1 rounded mb-1 shadow-sm border`}>
+                                                <div 
+                                                    key={event.id} 
+                                                    className={`${bgClass} p-1 rounded mb-1 shadow-sm border cursor-pointer transition-colors duration-150`}
+                                                    onClick={() => handleEventClick(event)}
+                                                >
                                                     <div className="font-bold truncate">{event.title}</div>
                                                     {event.leads && event.type !== 'booking' && event.type !== 'birthday' && (
                                                         <div className="truncate text-[10px] flex items-center opacity-80">
@@ -1106,6 +1117,87 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
                     </div>
                  )}
              </Card>
+
+             <Modal
+                isOpen={isEventDetailsOpen}
+                onClose={() => setIsEventDetailsOpen(false)}
+                title={
+                    selectedEvent?.type === 'birthday' ? 'รายละเอียดวันเกิด' :
+                    selectedEvent?.type === 'booking' ? 'รายละเอียดการจอง' : 'รายละเอียดนัดหมาย'
+                }
+                size="md"
+             >
+                {selectedEvent && (
+                    <div className="space-y-4">
+                        <div className={`p-4 rounded-xl border ${
+                            selectedEvent.type === 'birthday' ? 'bg-pink-50 border-pink-100' :
+                            selectedEvent.type === 'booking' ? 'bg-green-50 border-green-100' :
+                            'bg-sky-50 border-sky-100'
+                        }`}>
+                            <div className="flex items-start">
+                                <div className={`p-2 rounded-full mr-4 ${
+                                    selectedEvent.type === 'birthday' ? 'bg-pink-200 text-pink-700' :
+                                    selectedEvent.type === 'booking' ? 'bg-green-200 text-green-700' :
+                                    'bg-sky-200 text-sky-700'
+                                }`}>
+                                    {selectedEvent.type === 'birthday' ? <CakeIcon className="w-6 h-6"/> :
+                                     selectedEvent.type === 'booking' ? <CheckCircleIcon className="w-6 h-6"/> :
+                                     <CalendarIcon className="w-6 h-6"/>}
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-lg text-slate-800">{selectedEvent.title}</h3>
+                                    <p className="text-sm text-slate-500">
+                                        {new Date(selectedEvent.start_time).toLocaleDateString('th-TH', { 
+                                            weekday: 'long', 
+                                            year: 'numeric', 
+                                            month: 'long', 
+                                            day: 'numeric' 
+                                        })}
+                                        {selectedEvent.type !== 'birthday' && selectedEvent.type !== 'booking' && (
+                                            <>
+                                                <br/>
+                                                <span className="flex items-center mt-1">
+                                                    <ClockIcon className="w-4 h-4 mr-1"/>
+                                                    {new Date(selectedEvent.start_time).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}
+                                                    {' - '}
+                                                    {new Date(selectedEvent.end_time).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}
+                                                </span>
+                                            </>
+                                        )}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                            <h4 className="text-sm font-semibold text-slate-600 mb-3 border-b border-slate-200 pb-2">ข้อมูลเพิ่มเติม</h4>
+                            <div className="space-y-3 text-sm">
+                                {selectedEvent.leads?.name && (
+                                    <div className="flex">
+                                        <span className="text-slate-500 w-24 flex-shrink-0">ชื่อลูกค้า:</span>
+                                        <span className="font-medium text-slate-800">{selectedEvent.leads.name}</span>
+                                    </div>
+                                )}
+                                
+                                {selectedEvent.type === 'booking' && (
+                                    <>
+                                        <div className="flex">
+                                            <span className="text-slate-500 w-24 flex-shrink-0">วันที่จอง:</span>
+                                            <span className="font-medium text-slate-800">
+                                                {new Date(selectedEvent.start_time).toLocaleDateString('th-TH')}
+                                            </span>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end pt-2">
+                             <Button onClick={() => setIsEventDetailsOpen(false)} variant="secondary">ปิด</Button>
+                        </div>
+                    </div>
+                )}
+             </Modal>
         </div>
     );
 };
