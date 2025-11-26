@@ -23,6 +23,10 @@ export type Lead = Database['public']['Tables']['leads']['Row'] & {
 };
 export type Salesperson = Database['public']['Tables']['profiles']['Row'];
 export type CalendarEvent = Database['public']['Tables']['calendar_events']['Row'];
+export type CalendarEventWithLead = CalendarEvent & {
+  leads: { name: string } | null;
+};
+
 export type LeadActivity = Database['public']['Tables']['lead_activities']['Row'];
 export type Program = Database['public']['Tables']['programs']['Row'];
 

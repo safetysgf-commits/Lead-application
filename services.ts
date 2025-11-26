@@ -12,7 +12,6 @@ type SalespersonUpdate = Database['public']['Tables']['profiles']['Update'];
 // --- Constants ---
 export const statusColors: { [key in LeadStatus]: string } = {
     [LeadStatus.New]: 'bg-blue-500',
-    // FIX: Corrected typo from `LeadLeadStatus` to `LeadStatus`.
     [LeadStatus.Uncalled]: 'bg-orange-500',
     [LeadStatus.Contacted]: 'bg-yellow-500',
     [LeadStatus.FollowUp]: 'bg-purple-500',
@@ -20,6 +19,11 @@ export const statusColors: { [key in LeadStatus]: string } = {
     [LeadStatus.Lost]: 'bg-red-500',
 };
 export const leadStatuses = Object.values(LeadStatus);
+
+// --- LINE NOTIFICATION CONFIG ---
+const LINE_CHANNEL_ACCESS_TOKEN = 'P3MUI6dxMEaFKR8LYT0GbSZBcbV3bjvOTWA/tgTistte1TOXvagwyf6XidI/ZOy3NwIGaEXIO7xbzIxESiKXUdI39CBXH7GjTM4xlVk0x0DpZYVml3W75mFF05PUWvdJ8EnCEsDY87ihcLBxHf876QdB04t89/1O/w1cDnyilFU=';
+const LINE_TARGET_ID = 'Cfe28bbc3dacaaf3d7981625b99f80c7d'; // Group ID
+const APP_URL = 'https://lead-application-theta.vercel.app/';
 
 // --- Data Services ---
 
@@ -34,8 +38,6 @@ export const getLeads = async (role: 'admin' | 'sales', userId?: string) => {
       `)
       .order('received_date', { ascending: false });
 
-    // Note: 'after_care' role usually sees leads assigned to them OR all leads depending on policy.
-    // For now, assuming 'sales' logic applies (assigned_to check) unless admin.
     if (role === 'sales' && userId) {
         query = query.eq('assigned_to', userId);
     }
@@ -65,8 +67,9 @@ export const createLead = async (leadData: LeadInsert) => {
 };
 
 export const updateLead = async (id: number, leadData: LeadUpdate) => {
-    const { error } = await supabase.from('leads').update(leadData).eq('id', id);
+    const { data, error } = await supabase.from('leads').update(leadData).eq('id', id).select().single();
     if (error) throw error;
+    return data;
 };
 
 export const deleteLead = async (id: number) => {
@@ -96,8 +99,6 @@ export const updateSalesperson = async (id: string, salespersonData: Salesperson
 };
 
 export const updateUserPassword = async (userId: string, newPassword: string) => {
-    // Optimization: If the user is updating their OWN password, use the client SDK directly.
-    // This bypasses the need for the RPC function for self-service password changes.
     const { data: { user } } = await supabase.auth.getUser();
     
     if (user && user.id === userId) {
@@ -106,8 +107,6 @@ export const updateUserPassword = async (userId: string, newPassword: string) =>
         return;
     }
 
-    // If Admin is updating ANOTHER user's password, we must use the RPC function.
-    // This requires the 'update_user_password' function to be correctly defined in Supabase.
     const { error } = await supabase.rpc('update_user_password', {
         user_id: userId,
         new_password: newPassword
@@ -122,16 +121,65 @@ export const deleteSalesperson = async (id: string) => {
 };
 
 export const getCalendarEvents = async (role: 'admin' | 'sales', userId: string) => {
-    let query = supabase.from('calendar_events').select('*');
+    // 1. Fetch Manual Appointments
+    let query = supabase.from('calendar_events').select('*, leads(name)');
      if (role === 'sales') {
         query = query.eq('salesperson_id', userId);
     }
-    const { data, error } = await query;
+    const { data: appointments, error } = await query;
     if (error) throw error;
-    return data;
+
+    // 2. Fetch Leads for Bookings and Birthdays
+    let leadsQuery = supabase.from('leads').select('id, name, received_date, birthday, program, assigned_to');
+    if (role === 'sales') {
+        leadsQuery = leadsQuery.eq('assigned_to', userId);
+    }
+    const { data: leads, error: leadsError } = await leadsQuery;
+    if (leadsError) throw leadsError;
+
+    const events = [...(appointments || [])];
+
+    // 3. Map Leads to Events
+    leads?.forEach((lead) => {
+        // Booking Event (วันที่จอง)
+        if (lead.received_date) {
+            events.push({
+                id: -lead.id, // Negative ID to distinguish
+                title: `${lead.name} (${lead.program || 'N/A'})`,
+                start_time: lead.received_date,
+                end_time: lead.received_date,
+                salesperson_id: lead.assigned_to,
+                lead_id: lead.id,
+                leads: { name: lead.name },
+                type: 'booking' // Custom type
+            } as any);
+        }
+
+        // Birthday Event (Current Year)
+        if (lead.birthday) {
+             const bday = new Date(lead.birthday);
+             const today = new Date();
+             const currentYearBday = new Date(today.getFullYear(), bday.getMonth(), bday.getDate());
+             
+             // If birthday passed this year but we are viewing next year? 
+             // Simplification: Just show for current year.
+             
+             events.push({
+                id: -(lead.id + 1000000), // Distinct ID
+                title: `🎂 HBD ${lead.name}`,
+                start_time: currentYearBday.toISOString(),
+                end_time: currentYearBday.toISOString(),
+                salesperson_id: lead.assigned_to,
+                lead_id: lead.id,
+                leads: { name: lead.name },
+                type: 'birthday' // Custom type
+            } as any);
+        }
+    });
+
+    return events;
 };
 
-// Create 5 automatic follow-up appointments
 export const createFollowUpAppointments = async (leadId: number, salespersonId: string, serviceDate: string, leadName: string) => {
     const date = new Date(serviceDate);
     const followUps = [
@@ -148,9 +196,9 @@ export const createFollowUpAppointments = async (leadId: number, salespersonId: 
         d.setDate(d.getDate() + item.offsetDay);
         
         return {
-            title: `${item.label} - ${leadName}`,
+            title: `${item.label}`,
             start_time: d.toISOString(),
-            end_time: new Date(d.getTime() + 60 * 60 * 1000).toISOString(), // 1 hour duration
+            end_time: new Date(d.getTime() + 60 * 60 * 1000).toISOString(),
             salesperson_id: salespersonId,
             lead_id: leadId
         };
@@ -176,7 +224,7 @@ export const getDashboardStats = async (role: 'admin' | 'sales', userId?: string
         
         return {
             totalLeads: leads.length,
-            newLeads: leads.filter(l => new Date(l.created_at) >= new Date(new Date().toDateString())).length, // Simplified for today
+            newLeads: leads.filter(l => new Date(l.created_at) >= new Date(new Date().toDateString())).length,
             totalValue: wonLeads.reduce((sum, lead) => sum + (lead.value || 0), 0),
             teamSize: teamSize ?? 0,
             conversionRate: leads.length > 0 ? Math.round((wonLeads.length / leads.length) * 100) : 0,
@@ -219,21 +267,17 @@ export const getSalesPerformance = async (dateRange?: { start: string, end: stri
 };
 
 export const getSalesTeamPerformance = async (): Promise<SalespersonWithStats[]> => {
-    // 1. Get all sales profiles (Sales + After Care + Admin usually) - filtering for 'sales' only for the leaderboard generally
-    // If you want after_care in the list, change .eq('role', 'sales') to .in('role', ['sales', 'after_care'])
     const { data: profiles, error: profileError } = await supabase
         .from('profiles')
         .select('*')
-        .in('role', ['sales', 'after_care']); // Include After Care in performance stats
+        .in('role', ['sales', 'after_care']);
     if (profileError) throw profileError;
 
-    // 2. Get all leads
     const { data: leads, error: leadError } = await supabase
         .from('leads')
         .select('assigned_to, value, status');
     if (leadError) throw leadError;
 
-    // 3. Calculate stats for each salesperson
     const performanceData = profiles.map(salesperson => {
         const salespersonLeads = leads.filter(lead => lead.assigned_to === salesperson.id);
         
@@ -244,7 +288,6 @@ export const getSalesTeamPerformance = async (): Promise<SalespersonWithStats[]>
         const totalSales = wonLeads.reduce((sum, lead) => sum + (lead.value || 0), 0);
         const totalLeads = salespersonLeads.length;
         
-        // Avoid division by zero
         const conversionRate = totalLeads > 0 ? Math.round((wonLeads.length / totalLeads) * 100) : 0;
 
         return {
@@ -283,7 +326,6 @@ export const getConversionRates = async (salespersonId?: string, dateRange?: { s
 };
 
 export const getSalesTrend = async (dateRange?: { start: string, end: string }) => {
-    // This is a simplified version. A real implementation would use a database function or more complex queries.
     return [
         { name: 'ม.ค.', sales: 120000 },
         { name: 'ก.พ.', sales: 150000 },
@@ -358,7 +400,307 @@ export const createLeadActivity = async (leadId: number, description: string) =>
     if (error) throw error;
 };
 
-// --- Export Service ---
+// --- LINE Messaging API Integration ---
+
+type LineNotificationType = 'new_lead' | 'update_status' | 'delete_lead' | 'birthday' | 'test' | 'idle_leads' | 'reassign_leads' | 'followup_reminder' | 'birthday_report';
+
+interface LineNotificationData {
+    leadName?: string;
+    program?: string | null;
+    status?: string;
+    salesName?: string | null;
+    phone?: string;
+    receivedDate?: string;
+    address?: string | null;
+    notes?: string | null;
+    leads?: Lead[]; // Deprecated for birthday, use specific fields below
+    // New fields for complex reports
+    leadsList?: any[]; // For Idle/Reassign reports
+    birthdaysToday?: any[];
+    birthdaysMonth?: any[];
+    followUps?: any[];
+}
+
+export const sendLineNotification = async (type: LineNotificationType, data: LineNotificationData) => {
+    // Use a CORS proxy to bypass browser restrictions for demo purposes.
+    const lineApiUrl = 'https://api.line.me/v2/bot/message/push';
+    const url = `https://corsproxy.io/?${encodeURIComponent(lineApiUrl)}`;
+    
+    let headerColor = '#0ea5e9'; // Default Blue
+    let headerTitle = 'แจ้งเตือน';
+    let altText = 'CRM Notification';
+    let statusColor = '#666666';
+
+    switch (type) {
+        case 'new_lead':
+            headerColor = '#06c755'; // LINE Green
+            headerTitle = '✨ ลูกค้าใหม่ (New Lead)';
+            altText = `ลูกค้าใหม่: ${data.leadName}`;
+            statusColor = '#06c755';
+            break;
+        case 'update_status':
+            headerColor = '#f97316'; // Orange
+            headerTitle = '📝 อัปเดตข้อมูล (Update)';
+            altText = `อัปเดต: ${data.leadName}`;
+            statusColor = '#f97316';
+            break;
+        case 'delete_lead':
+            headerColor = '#ef4444'; // Red
+            headerTitle = '🗑️ ลบข้อมูล (Delete)';
+            altText = `ลบข้อมูล: ${data.leadName}`;
+            statusColor = '#ff334b';
+            break;
+        case 'birthday': // Single birthday or legacy check
+            headerColor = '#ec4899'; // Pink
+            headerTitle = '🎂 สุขสันต์วันเกิด (Birthday)';
+            altText = `สุขสันต์วันเกิดลูกค้า`;
+            break;
+        case 'test':
+            headerColor = '#8b5cf6'; // Violet
+            headerTitle = '🔔 ทดสอบระบบ (Test)';
+            altText = `ทดสอบการแจ้งเตือน`;
+            break;
+        case 'idle_leads':
+            headerColor = '#dc2626'; // Red darker
+            headerTitle = '⚠️ Lead ค้างเกินกำหนด';
+            altText = `แจ้งเตือน Lead ค้าง`;
+            break;
+        case 'reassign_leads':
+            headerColor = '#2563eb'; // Blue
+            headerTitle = '🔄 โอนย้าย Lead (24ชม.)';
+            altText = `แจ้งเตือนการโอนย้ายงาน`;
+            break;
+        case 'followup_reminder':
+            headerColor = '#9333ea'; // Purple
+            headerTitle = '📅 นัดหมายติดตามผลวันนี้';
+            altText = `แจ้งเตือนนัดหมายประจำวัน`;
+            break;
+        case 'birthday_report':
+            headerColor = '#db2777'; // Pink Darker
+            headerTitle = '🍰 รายงานวันเกิดลูกค้า';
+            altText = `รายงานวันเกิดลูกค้า`;
+            break;
+    }
+
+    let bodyContents: any[] = [];
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+
+    // Format received date for display
+    const receivedDateFormatted = data.receivedDate 
+        ? new Date(data.receivedDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric'}) 
+        : '-';
+
+    const createDetailRow = (label: string, value: string, valueColor: string = "#333333") => ({
+        type: "box",
+        layout: "baseline",
+        spacing: "sm",
+        contents: [
+            { type: "text", text: label, color: "#aaaaaa", size: "sm", flex: 2 },
+            { type: "text", text: value, wrap: true, color: valueColor, size: "sm", flex: 5, weight: "bold" }
+        ]
+    });
+
+    const createTableRow = (col1: string, col2: string, col3?: string) => ({
+        type: "box",
+        layout: "horizontal",
+        margin: "sm",
+        contents: [
+            { type: "text", text: col1, size: "xs", color: "#555555", flex: 4, wrap: true },
+            { type: "text", text: col2, size: "xs", color: "#888888", flex: 3, align: "center" },
+            col3 ? { type: "text", text: col3, size: "xs", color: "#333333", flex: 3, align: "end", weight: "bold" } : null
+        ].filter(Boolean)
+    });
+
+    if (type === 'birthday_report') {
+        bodyContents = [
+            { type: "text", text: `ประจำวันที่ ${dateStr}`, size: "xs", color: "#aaaaaa", align: "center", margin: "none" }
+        ];
+
+        // Today Section
+        if (data.birthdaysToday && data.birthdaysToday.length > 0) {
+            bodyContents.push(
+                { type: "separator", margin: "md" },
+                { type: "text", text: `🎉 เกิดวันนี้ (${data.birthdaysToday.length})`, weight: "bold", size: "sm", margin: "md", color: "#db2777" }
+            );
+            data.birthdaysToday.forEach(l => {
+                bodyContents.push({
+                    type: "box",
+                    layout: "horizontal",
+                    margin: "sm",
+                    contents: [
+                        { type: "text", text: l.name, size: "sm", color: "#333333", flex: 6, weight: "bold" },
+                        { type: "text", text: l.phone, size: "sm", color: "#db2777", align: "end", flex: 4 }
+                    ]
+                });
+            });
+        }
+
+        // Month Section
+        if (data.birthdaysMonth && data.birthdaysMonth.length > 0) {
+            bodyContents.push(
+                { type: "separator", margin: "md" },
+                { type: "text", text: `📅 เกิดเดือนนี้ (${data.birthdaysMonth.length})`, weight: "bold", size: "sm", margin: "md", color: "#0ea5e9" }
+            );
+             data.birthdaysMonth.forEach(l => {
+                const bday = new Date(l.birthday);
+                const dayStr = bday.getDate();
+                bodyContents.push({
+                    type: "box",
+                    layout: "horizontal",
+                    margin: "sm",
+                    contents: [
+                        { type: "text", text: l.name, size: "xs", color: "#555555", flex: 6 },
+                        { type: "text", text: `วันที่ ${dayStr}`, size: "xs", color: "#aaaaaa", align: "center", flex: 2 },
+                        { type: "text", text: l.phone, size: "xs", color: "#0ea5e9", align: "end", flex: 4 }
+                    ]
+                });
+            });
+        }
+        
+        if ((!data.birthdaysToday || data.birthdaysToday.length === 0) && (!data.birthdaysMonth || data.birthdaysMonth.length === 0)) {
+             bodyContents.push( { type: "text", text: "ไม่มีรายการวันเกิดในช่วงนี้", size: "sm", color: "#999999", align: "center", margin: "lg" });
+        }
+
+    } else if (type === 'idle_leads' && data.leadsList) {
+        bodyContents = [
+            { type: "text", text: `ข้อมูล ณ เวลา ${timeStr}`, size: "xs", color: "#aaaaaa", align: "center" },
+            { type: "separator", margin: "md" },
+            createTableRow("ชื่อลูกค้า", "สถานะ", "เวลาที่ค้าง"),
+            { type: "separator", margin: "sm" },
+            ...data.leadsList.slice(0, 10).map(l => { // Limit to 10 to avoid size limit
+                const diffMs = new Date().getTime() - new Date(l.created_at).getTime();
+                const diffMins = Math.floor(diffMs / 60000);
+                const timeText = diffMins > 60 ? `${Math.floor(diffMins/60)} ชม.` : `${diffMins} นาที`;
+                return createTableRow(l.name, l.status, timeText);
+            }),
+            data.leadsList.length > 10 ? { type: "text", text: `...และอีก ${data.leadsList.length - 10} รายการ`, size: "xs", color: "#aaaaaa", align: "center", margin: "md" } : null
+        ].filter(Boolean);
+
+    } else if (type === 'reassign_leads' && data.leadsList) {
+        bodyContents = [
+            { type: "text", text: "รายการที่ถูกโอนย้ายอัตโนมัติ", weight: "bold", size: "sm", align: "center" },
+            { type: "separator", margin: "md" },
+             createTableRow("ชื่อลูกค้า", "เซลล์เดิม", "สถานะ"),
+             { type: "separator", margin: "sm" },
+            ...data.leadsList.slice(0, 10).map(l => createTableRow(l.name, l.profiles?.full_name?.split(' ')[0] || '-', "โอนย้ายแล้ว")),
+             data.leadsList.length > 10 ? { type: "text", text: `...และอีก ${data.leadsList.length - 10} รายการ`, size: "xs", color: "#aaaaaa", align: "center", margin: "md" } : null
+        ].filter(Boolean);
+
+    } else if (type === 'followup_reminder' && data.followUps) {
+        bodyContents = [
+             { type: "text", text: `นัดหมายประจำวันที่ ${dateStr}`, weight: "bold", size: "sm", align: "center" },
+             { type: "separator", margin: "md" },
+             ...data.followUps.slice(0, 10).map(e => ({
+                type: "box",
+                layout: "vertical",
+                margin: "sm",
+                contents: [
+                    { type: "text", text: `🕒 ${new Date(e.start_time).toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'})} - ${e.title}`, size: "sm", weight: "bold", color: "#333333" },
+                    { type: "text", text: `ลูกค้า: ${e.leads?.name || '-'}`, size: "xs", color: "#666666", margin: "xs" }
+                ]
+             })),
+             data.followUps.length === 0 ? { type: "text", text: "ไม่มีนัดหมายวันนี้", size: "sm", color: "#999999", align: "center", margin: "lg" } : null
+        ].filter(Boolean);
+
+    } else {
+        // Default Single Item Layout (New Lead, Update, Delete, Test)
+        bodyContents = [
+            {
+                type: "box",
+                layout: "vertical",
+                contents: [
+                    { type: "text", text: dateStr, weight: "bold", color: headerColor, size: "sm" },
+                    { type: "text", text: timeStr + " น.", size: "3xl", weight: "bold", color: "#333333", margin: "xs" }
+                ]
+            },
+            { type: "separator", margin: "lg" },
+            {
+                type: "box",
+                layout: "vertical",
+                margin: "lg",
+                spacing: "md",
+                contents: [
+                    data.receivedDate ? createDetailRow("วันที่ลงจอง", receivedDateFormatted) : null,
+                    data.salesName ? createDetailRow("ฝ่ายขาย", data.salesName) : null,
+                    data.leadName ? createDetailRow("ชื่อลูกค้า", data.leadName) : null,
+                    data.program ? createDetailRow("โปรแกรม", data.program) : null,
+                    data.phone ? createDetailRow("เบอร์โทร", data.phone, "#1e40af") : null,
+                    
+                    (type === 'update_status' || type === 'new_lead' || type === 'test') ? 
+                        createDetailRow("สถานะ", data.status || "ใหม่", statusColor) : null,
+
+                    data.address ? createDetailRow("ที่อยู่", data.address) : null,
+                    data.notes ? createDetailRow("หมายเหตุ", data.notes) : null,
+
+                     type === 'delete_lead' ? 
+                        { type: "text", text: "⚠️ ข้อมูลถูกลบออกจากระบบแล้ว", margin: "xl", size: "xs", color: "#ef4444", align: "center" } : null
+                ].filter(Boolean)
+            }
+        ];
+    }
+
+    const flexMessage = {
+        type: "bubble",
+        size: "giga",
+        header: {
+            type: "box",
+            layout: "vertical",
+            contents: [
+                { type: "text", text: headerTitle, weight: "bold", color: "#FFFFFF", size: "lg" }
+            ],
+            backgroundColor: headerColor,
+            paddingAll: "lg"
+        },
+        body: {
+            type: "box",
+            layout: "vertical",
+            contents: bodyContents,
+            paddingAll: "lg"
+        },
+        footer: {
+            type: "box",
+            layout: "vertical",
+            contents: [
+                { type: "button", action: { type: "uri", label: "เปิดแอปพลิเคชัน", uri: APP_URL }, style: "primary", color: headerColor, height: "sm" }
+            ],
+            paddingAll: "lg"
+        }
+    };
+
+    const body = {
+        to: LINE_TARGET_ID,
+        messages: [
+            {
+                type: "flex",
+                altText: altText,
+                contents: flexMessage
+            }
+        ]
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`
+            },
+            body: JSON.stringify(body)
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`LINE API Error: ${response.status} - ${errorText}`);
+        }
+        console.log(`Line Notification Sent (${type})`);
+    } catch (error) {
+        console.error("Failed to send Line Notification", error);
+    }
+};
+
+// ... Rest of services.ts remains the same (export functions etc)
 export const exportToPDF = (leads: Lead[]) => {
   const doc = new jsPDF();
   
@@ -411,7 +753,7 @@ export const exportToCSV = (leads: Lead[]) => {
         return row.join(',');
     });
 
-    const csvString = "\uFEFF" + header + csvRows.join('\n'); // Add BOM for Excel UTF-8 support
+    const csvString = "\uFEFF" + header + csvRows.join('\n');
     const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
@@ -428,8 +770,6 @@ export const exportToCSV = (leads: Lead[]) => {
     document.body.removeChild(link);
 };
 
-
-// --- Connection Test Service ---
 export const runConnectionTest = async (onProgress: (result: ConnectionTestResult) => void) => {
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
@@ -501,6 +841,30 @@ begin
 end;
 $$;`;
 
+    const SQL_ADMIN_CREATE_USER = `-- Function for admin to create users
+create or replace function admin_create_user(email_input text, password_input text, full_name_input text, role_input text)
+returns uuid
+language plpgsql
+security definer
+as $$
+declare
+  new_user_id uuid;
+begin
+  -- Create user in auth.users
+  insert into auth.users (email, encrypted_password, email_confirmed_at, role)
+  values (email_input, crypt(password_input, gen_salt('bf')), now(), 'authenticated')
+  returning id into new_user_id;
+
+  -- Create profile in public.profiles (handled by trigger usually, but force it here if needed or update it)
+  -- Assuming trigger handles creation, we update the role/name
+  update public.profiles
+  set full_name = full_name_input, role = role_input
+  where id = new_user_id;
+
+  return new_user_id;
+end;
+$$;`;
+
     const tests = [
         {
             name: "1. ตรวจสอบการเชื่อมต่อ Supabase",
@@ -533,7 +897,6 @@ $$;`;
             name: "7. ตรวจสอบฟังก์ชันเปลี่ยนรหัสผ่าน (Admin)",
             requiresAuth: true,
             action: async (currentUserId?: string) => {
-                // Cannot verify function body easily, so we just provide the SQL fix if needed.
                 return { 
                     success: true, 
                     details: "ตรวจสอบด้วยตัวเอง: หากเปลี่ยนรหัสผ่านแล้วเจอ Error ให้ใช้ SQL ด้านล่างนี้แก้ไข", 
@@ -545,7 +908,6 @@ $$;`;
             name: "8. ทดสอบสิทธิ์ตาราง 'leads' (CRUD)",
             requiresAuth: true,
             action: async (currentUserId?: string) => {
-                // This test must be run as an admin to insert, then a sales user must be assigned to test update/delete
                 return { success: true, details: "ข้ามการทดสอบอัตโนมัติ (ต้องการสิทธิ์ Admin และ Sales)", fix: RLS_LEADS_FIX };
             }
         },
@@ -586,6 +948,17 @@ $$;`;
                 } catch (e: any) {
                     return { success: false, details: `ล้มเหลว: ${e.message}`, fix: RLS_CALENDAR_FIX };
                 }
+            }
+        },
+         {
+            name: "11. ตรวจสอบฟังก์ชันสร้างผู้ใช้ (Admin)",
+            requiresAuth: true,
+            action: async (currentUserId?: string) => {
+                 return { 
+                    success: true, 
+                    details: "ตรวจสอบด้วยตัวเอง: หากสร้างผู้ใช้ไม่ได้ ให้ใช้ SQL ด้านล่างนี้แก้ไข", 
+                    fix: SQL_ADMIN_CREATE_USER 
+                };
             }
         }
     ];

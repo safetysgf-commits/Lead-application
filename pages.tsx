@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useContext } from 'react';
 import { AuthContext } from './App';
-import { User, Lead, Salesperson, CalendarEvent, Database, Role, LeadActivity, Program, SalespersonWithStats } from './types.ts';
+import { User, Lead, Salesperson, CalendarEvent, Database, Role, LeadActivity, Program, SalespersonWithStats, CalendarEventWithLead } from './types.ts';
 import { 
     getLeads, getSalesTeam, getCalendarEvents, getDashboardStats, getSalesPerformance, getConversionRates,
     createLead, updateLead, deleteLead, updateSalesperson, deleteSalesperson,
     statusColors, getBirthdays, getSalesTrend, exportToPDF, exportToCSV,
     getLeadActivities, createLeadActivity, updateUserPassword, adminCreateUser,
-    getPrograms, createProgram, deleteProgram, getSalesTeamPerformance, createFollowUpAppointments
+    getPrograms, createProgram, deleteProgram, getSalesTeamPerformance, createFollowUpAppointments,
+    sendLineNotification
 } from './services.ts';
 import {
     Card, StatCard, Button, Modal, Spinner, LeadForm, SalespersonForm, ChangePasswordForm, AddUserForm, AppointmentModal,
@@ -27,7 +28,16 @@ type SalespersonUpdate = Database['public']['Tables']['profiles']['Update'];
 const getErrorMessage = (error: any): string => {
     if (!error) return 'เกิดข้อผิดพลาดที่ไม่ระบุสาเหตุ';
     if (typeof error === 'string') return error;
-    return error.message || error.error_description || JSON.stringify(error);
+    // Handle Supabase error objects or generic Error objects
+    if (error?.message) return error.message;
+    if (error?.error_description) return error.error_description;
+    // Fallback to string representation if JSON fails or is empty
+    try {
+        const str = JSON.stringify(error);
+        return str === '{}' ? String(error) : str;
+    } catch (e) {
+        return String(error);
+    }
 };
 
 // --- Auth Pages ---
@@ -367,22 +377,17 @@ export const AdminDashboard: React.FC = () => {
 export const SalesDashboard: React.FC<{ user: User }> = ({ user }) => {
     const [stats, setStats] = useState<any>(null);
     const [conversionData, setConversionData] = useState([]);
-    const [birthdays, setBirthdays] = useState<{today: Lead[], thisMonth: Lead[]}>({today: [], thisMonth: []});
-    const [isBirthdayModalOpen, setIsBirthdayModalOpen] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
             setStats(await getDashboardStats(user.role as any, user.id)); // Cast role to avoid strict type issue if 'after_care' treated differently in future
             setConversionData(await getConversionRates(user.id));
-            setBirthdays(await getBirthdays(user.id));
         }
         fetchData();
     }, [user.id, user.role]);
 
     if (!stats) return <Spinner />;
     
-    const totalBirthdays = birthdays.today.length + birthdays.thisMonth.length;
-
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -390,18 +395,6 @@ export const SalesDashboard: React.FC<{ user: User }> = ({ user }) => {
                     <h1 className="text-3xl font-bold text-slate-800">แดชบอร์ดฝ่ายขาย</h1>
                     <p className="text-slate-500">ภาพรวมข้อมูลการขายของคุณ</p>
                 </div>
-                <button 
-                    onClick={() => setIsBirthdayModalOpen(true)}
-                    className="relative p-2 bg-white rounded-full shadow-md hover:bg-slate-50 transition-colors border border-slate-100"
-                    title="ดูรายการวันเกิด"
-                >
-                    <CakeIcon className="w-8 h-8 text-rose-500" />
-                    {totalBirthdays > 0 && (
-                        <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-xs font-bold text-white ring-2 ring-white">
-                            {totalBirthdays}
-                        </span>
-                    )}
-                </button>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard title="ลีดของฉัน" value={stats.totalLeads} icon={<UsersIcon className="w-6 h-6"/>} />
@@ -413,44 +406,6 @@ export const SalesDashboard: React.FC<{ user: User }> = ({ user }) => {
                 <ConversionRatePieChart data={conversionData} />
                 <BirthdayReport salespersonId={user.id} />
              </div>
-
-             <Modal
-                isOpen={isBirthdayModalOpen}
-                onClose={() => setIsBirthdayModalOpen(false)}
-                title="รายการวันเกิดลูกค้า"
-             >
-                 <div className="space-y-4">
-                    <div>
-                        <h4 className="font-bold text-rose-500 mb-2 flex items-center"><CakeIcon className="w-5 h-5 mr-2"/> วันนี้ ({birthdays.today.length})</h4>
-                        {birthdays.today.length > 0 ? (
-                            <ul className="bg-rose-50 rounded-xl p-3 space-y-2">
-                                {birthdays.today.map(l => (
-                                    <li key={l.id} className="flex justify-between text-sm">
-                                        <span className="font-medium">{l.name}</span>
-                                        <span className="text-rose-700">{l.phone}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : <p className="text-sm text-slate-500 pl-7">ไม่มีวันเกิดวันนี้</p>}
-                    </div>
-                    <div className="border-t border-slate-100 pt-4">
-                        <h4 className="font-bold text-sky-600 mb-2 flex items-center"><CalendarIcon className="w-5 h-5 mr-2"/> เดือนนี้ ({birthdays.thisMonth.length})</h4>
-                         {birthdays.thisMonth.length > 0 ? (
-                            <ul className="bg-sky-50 rounded-xl p-3 space-y-2 max-h-60 overflow-y-auto">
-                                {birthdays.thisMonth.map(l => (
-                                    <li key={l.id} className="flex justify-between text-sm border-b border-sky-100 last:border-0 pb-1 last:pb-0">
-                                        <div className="flex flex-col">
-                                            <span className="font-medium">{l.name}</span>
-                                            <span className="text-xs text-slate-400">{new Date(l.birthday!).toLocaleDateString('th-TH', {day: 'numeric', month: 'long'})}</span>
-                                        </div>
-                                        <span className="text-sky-700">{l.phone}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : <p className="text-sm text-slate-500 pl-7">ไม่มีวันเกิดในเดือนนี้</p>}
-                    </div>
-                 </div>
-             </Modal>
         </div>
     );
 };
@@ -469,86 +424,42 @@ const BirthdayReport: React.FC<{salespersonId?: string}> = ({salespersonId}) => 
                 <StatCard title="เกิดวันนี้" value={birthdays.today.length.toString()} icon={<CakeIcon className="w-6 h-6"/>} />
                 <StatCard title="เกิดเดือนนี้" value={birthdays.thisMonth.length.toString()} icon={<CalendarIcon className="w-6 h-6"/>} />
             </div>
-            <div>
-                <h4 className="font-semibold text-sky-700">รายชื่อลูกค้าที่เกิดวันนี้</h4>
-                {birthdays.today.length > 0 ? (
-                    <ul className="text-sm text-slate-600 space-y-2 mt-2">
-                        {birthdays.today.map(lead => (
-                            <li key={lead.id} className="p-2 bg-sky-50 rounded-lg">{lead.name} - {lead.phone}</li>
-                        ))}
-                    </ul>
-                ) : <p className="text-sm text-slate-500 mt-2">ไม่มีวันเกิดวันนี้</p>}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <h4 className="font-semibold text-rose-500 flex items-center mb-2"><CakeIcon className="w-4 h-4 mr-1"/> วันนี้</h4>
+                    {birthdays.today.length > 0 ? (
+                        <ul className="text-sm text-slate-600 space-y-2 bg-rose-50 p-3 rounded-xl max-h-60 overflow-y-auto">
+                            {birthdays.today.map(lead => (
+                                <li key={lead.id} className="flex justify-between border-b border-rose-100 last:border-0 pb-1">
+                                    <span>{lead.name}</span>
+                                    <span className="font-mono text-xs">{lead.phone}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : <p className="text-sm text-slate-400 italic">ไม่มีวันเกิดวันนี้</p>}
+                </div>
+                <div>
+                    <h4 className="font-semibold text-sky-600 flex items-center mb-2"><CalendarIcon className="w-4 h-4 mr-1"/> เดือนนี้</h4>
+                     {birthdays.thisMonth.length > 0 ? (
+                        <ul className="text-sm text-slate-600 space-y-2 bg-sky-50 p-3 rounded-xl max-h-60 overflow-y-auto">
+                            {birthdays.thisMonth.map(lead => (
+                                <li key={lead.id} className="flex justify-between border-b border-sky-100 last:border-0 pb-1">
+                                    <div>
+                                        <div className="font-medium">{lead.name}</div>
+                                        <div className="text-xs text-slate-400">{new Date(lead.birthday!).getDate()} {new Date(lead.birthday!).toLocaleString('default', { month: 'short' })}</div>
+                                    </div>
+                                    <span className="font-mono text-xs self-center">{lead.phone}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : <p className="text-sm text-slate-400 italic">ไม่มีวันเกิดเดือนนี้</p>}
+                </div>
             </div>
         </Card>
     )
 }
 
 // --- Leads Page ---
-const LeadCard: React.FC<{lead: Lead, onEdit: (lead: Lead) => void, onDelete: (id: number) => void, onSchedule?: (lead: Lead) => void}> = ({lead, onEdit, onDelete, onSchedule}) => {
-    const [isRecent, setIsRecent] = useState(false);
-    const auth = useContext(AuthContext);
-
-    useEffect(() => {
-        if (lead.last_update_date) {
-            const now = new Date();
-            const lastUpdate = new Date(lead.last_update_date);
-            const diffInSeconds = (now.getTime() - lastUpdate.getTime()) / 1000;
-
-            if (diffInSeconds >= 0 && diffInSeconds < 5) {
-                setIsRecent(true);
-                const timer = setTimeout(() => setIsRecent(false), 2000);
-                return () => clearTimeout(timer);
-            }
-        }
-    }, [lead.last_update_date]);
-
-    return (
-        <Card className={`group relative p-0 transition-all duration-300 ease-in-out hover:shadow-xl hover:-translate-y-1 ${isRecent ? 'flash-update' : ''}`}>
-             <div className={`absolute top-0 left-0 bottom-0 w-2 rounded-l-2xl ${statusColors[lead.status]}`}></div>
-             <div className="pl-6 pr-4 py-4 flex flex-col h-full">
-                
-                <div className="flex justify-between items-start mb-3">
-                    <div className="flex-1 min-w-0">
-                        <h3 className="font-bold text-lg text-slate-800 pr-2 truncate">{lead.name}</h3>
-                        {lead.program && <p className="text-sm text-slate-600 truncate">{lead.program}</p>}
-                    </div>
-                    <span className={`px-3 py-1 text-xs font-bold rounded-full text-white shrink-0 ${statusColors[lead.status]}`}>
-                        {lead.status}
-                    </span>
-                </div>
-                
-                <div className="flex-grow text-sm text-slate-500 space-y-2 my-2">
-                    <p className="flex items-center"><PhoneIcon className="w-4 h-4 mr-3 text-slate-400 flex-shrink-0" /> <span className="truncate">{lead.phone}</span></p>
-                    {lead.birthday && <p className="flex items-center"><CakeIcon className="w-4 h-4 mr-3 text-slate-400 flex-shrink-0" /> {new Date(lead.birthday).toLocaleDateString('th-TH', { month: 'long', day: 'numeric' })}</p>}
-                    {lead.address && <p className="flex items-center"><MapPinIcon className="w-4 h-4 mr-3 text-slate-400 flex-shrink-0" /> <span className="line-clamp-1">{lead.address}</span></p>}
-                </div>
-
-                <div className="flex justify-between items-center pt-3 mt-auto border-t border-slate-200/80">
-                     <p className="text-xs text-slate-400">
-                        ผู้ดูแล: <span className="font-medium text-slate-500">{lead.profiles?.full_name || 'N/A'}</span>
-                    </p>
-                    <div className="flex items-center space-x-1">
-                         {auth?.user?.role === 'admin' && (
-                            <button onClick={() => onDelete(lead.id)} title="Delete Lead" className="opacity-0 group-hover:opacity-100 transition-opacity text-red-400 hover:text-red-600 p-2 rounded-full hover:bg-red-100">
-                                <TrashIcon className="w-5 h-5"/>
-                            </button>
-                        )}
-                        {auth?.user?.role === 'after_care' && onSchedule && (
-                             <Button onClick={() => onSchedule(lead)} variant="primary" className="!px-3 !py-1.5 text-xs font-bold !rounded-lg !bg-indigo-600 hover:!bg-indigo-700">
-                                <CalendarIcon className="w-4 h-4 mr-1"/>
-                                ตั้งนัดหมาย
-                            </Button>
-                        )}
-                        <Button onClick={() => onEdit(lead)} variant="secondary" className="!px-3 !py-1.5 text-sm font-bold !rounded-lg !bg-slate-100 group-hover:!bg-[var(--color-primary-extralight)] group-hover:text-[var(--color-primary)]">
-                            <EditIcon className="w-4 h-4 mr-1.5"/> 
-                            <span>อัปเดต</span>
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        </Card>
-    );
-};
 
 export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: number) => void }> = ({ user, setNotificationCount }) => {
     const [leads, setLeads] = useState<Lead[]>([]);
@@ -594,8 +505,7 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
                                            (payload.eventType === 'UPDATE' && (changedLead.assigned_to === user.id || (payload.old as Lead).assigned_to === user.id));
 
                     if (relevantChange) {
-                        addToast('รายการลีดมีการอัปเดต...', 'info');
-                        fetchLeads();
+                        fetchLeads(); 
                     }
                 }
             )
@@ -635,26 +545,75 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
 
     const handleSaveLead = async (leadData: LeadInsert, id?: number) => {
         try {
+            let assigneeName = '';
+            let assigneeProfile = null;
+            const team = await getSalesTeam();
+            if (leadData.assigned_to) {
+                assigneeProfile = team.find(s => s.id === leadData.assigned_to);
+                assigneeName = assigneeProfile?.full_name || 'ไม่ระบุ';
+            } else {
+                assigneeName = 'ส่วนกลาง / ไม่ระบุ';
+            }
+
             if (id && editingLead) {
-                // Check for changes to create activity log
                 const changes: string[] = [];
                 if (editingLead.status !== leadData.status) {
                     changes.push(`เปลี่ยนสถานะเป็น "${leadData.status}"`);
                 }
                 if (editingLead.assigned_to !== leadData.assigned_to) {
-                     const team = await getSalesTeam();
-                     const newAssignee = team.find(s => s.id === leadData.assigned_to);
-                     changes.push(`มอบหมายงานให้ "${newAssignee?.full_name || 'N/A'}"`);
+                     changes.push(`มอบหมายงานให้ "${assigneeName}"`);
                 }
                 if (changes.length > 0) {
                      await createLeadActivity(id, changes.join(', '));
+                     
+                     // Send Update Notification
+                     sendLineNotification('update_status', {
+                        leadName: leadData.name,
+                        status: leadData.status,
+                        program: leadData.program,
+                        salesName: assigneeName,
+                        phone: leadData.phone,
+                        receivedDate: leadData.received_date, // Use the new received_date
+                        address: leadData.address,
+                        notes: leadData.notes
+                     });
                 }
-                await updateLead(id, leadData as LeadUpdate);
+                const updatedLead = await updateLead(id, leadData as LeadUpdate);
+                
+                // Immediately update local state to reflect status changes
+                setLeads(prev => prev.map(l => {
+                    if (l.id === id) {
+                        return { 
+                            ...l, 
+                            ...updatedLead, 
+                            profiles: assigneeProfile ? { full_name: assigneeProfile.full_name || '' } : l.profiles 
+                        };
+                    }
+                    return l;
+                }));
+                
                 addToast('อัปเดตข้อมูลลีดสำเร็จ', 'success');
             } else {
                 const newLead = await createLead(leadData);
                  if (newLead) {
                     await createLeadActivity(newLead.id, 'สร้างลีดใหม่');
+                    
+                    // Send New Lead Notification
+                    sendLineNotification('new_lead', {
+                        leadName: leadData.name,
+                        program: leadData.program,
+                        salesName: assigneeName,
+                        phone: leadData.phone,
+                        receivedDate: leadData.received_date,
+                        address: leadData.address,
+                        notes: leadData.notes
+                    });
+
+                    const newLeadWithProfile = { 
+                        ...newLead, 
+                        profiles: assigneeProfile ? { full_name: assigneeProfile.full_name || '' } : null 
+                    };
+                    setLeads(prev => [newLeadWithProfile as Lead, ...prev]);
                 }
                 addToast('เพิ่มลีดใหม่สำเร็จ', 'success');
             }
@@ -667,7 +626,22 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
     const handleDeleteLead = async (id: number) => {
          if(window.confirm('คุณแน่ใจหรือไม่ว่าต้องการลบลีดนี้? การกระทำนี้ไม่สามารถย้อนกลับได้')) {
             try {
+                // Find details before delete for notification
+                const leadToDelete = leads.find(l => l.id === id);
+                if (leadToDelete) {
+                     await sendLineNotification('delete_lead', {
+                        leadName: leadToDelete.name,
+                        program: leadToDelete.program,
+                        phone: leadToDelete.phone,
+                        salesName: leadToDelete.profiles?.full_name,
+                        receivedDate: leadToDelete.received_date,
+                        address: leadToDelete.address,
+                        notes: leadToDelete.notes
+                     });
+                }
+
                 await deleteLead(id);
+                setLeads(prev => prev.filter(l => l.id !== id));
                 addToast('ลบลีดสำเร็จ', 'success');
             } catch (error: any) {
                 addToast(`ลบล้มเหลว: ${getErrorMessage(error)}`, 'error');
@@ -717,17 +691,79 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (count: num
             </div>
             {isLoading && leads.length === 0 ? <Spinner /> : (
                 leads.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                        {leads.map(lead => (
-                            <LeadCard 
-                                key={lead.id} 
-                                lead={lead} 
-                                onEdit={handleOpenModal} 
-                                onDelete={handleDeleteLead}
-                                onSchedule={handleOpenAppointmentModal}
-                            />
-                        ))}
-                    </div>
+                    <Card className="overflow-hidden p-0 border-0 shadow-lg ring-1 ring-slate-200 sm:rounded-2xl">
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-slate-200">
+                                <thead className="bg-slate-100">
+                                    <tr>
+                                        <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">วันที่จอง</th>
+                                        <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">ชื่อลูกค้า</th>
+                                        <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">เบอร์โทร</th>
+                                        <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">โปรแกรม</th>
+                                        <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">สถานะ</th>
+                                        <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">ผู้ดูแล</th>
+                                        <th scope="col" className="px-6 py-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">จัดการ</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-slate-200">
+                                    {leads.map((lead) => (
+                                        <tr key={lead.id} className="hover:bg-sky-50/60 transition-colors duration-150 odd:bg-white even:bg-slate-50/80">
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
+                                                {new Date(lead.received_date).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="text-sm font-semibold text-slate-800">{lead.name}</div>
+                                                {lead.address && <div className="text-xs text-slate-400 mt-0.5 truncate max-w-[150px]" title={lead.address}>{lead.address}</div>}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600 font-mono">
+                                                {lead.phone}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
+                                                {lead.program || '-'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full text-white ${statusColors[lead.status]}`}>
+                                                    {lead.status}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                {lead.profiles?.full_name || 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                <div className="flex justify-center space-x-2">
+                                                    {user.role === 'after_care' && (
+                                                        <button 
+                                                            onClick={() => handleOpenAppointmentModal(lead)} 
+                                                            className="text-indigo-600 hover:text-indigo-900 bg-indigo-50 p-2 rounded-lg hover:bg-indigo-100 transition-colors"
+                                                            title="ตั้งนัดหมาย"
+                                                        >
+                                                            <CalendarIcon className="w-4 h-4"/>
+                                                        </button>
+                                                    )}
+                                                    <button 
+                                                        onClick={() => handleOpenModal(lead)} 
+                                                        className="text-slate-600 hover:text-slate-900 bg-slate-100 p-2 rounded-lg hover:bg-slate-200 transition-colors"
+                                                        title="แก้ไข"
+                                                    >
+                                                        <EditIcon className="w-4 h-4"/>
+                                                    </button>
+                                                    {user.role === 'admin' && (
+                                                        <button 
+                                                            onClick={() => handleDeleteLead(lead.id)} 
+                                                            className="text-red-600 hover:text-red-900 bg-red-50 p-2 rounded-lg hover:bg-red-100 transition-colors"
+                                                            title="ลบ"
+                                                        >
+                                                            <TrashIcon className="w-4 h-4"/>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Card>
                 ) : (
                     <Card className="text-center py-16">
                          <h3 className="text-xl font-semibold text-slate-700">ยังไม่มีข้อมูลลีด</h3>
@@ -869,7 +905,6 @@ export const SalesTeamPage: React.FC = () => {
             handleClosePasswordModal();
         } catch (error: any) {
             const errorMessage = getErrorMessage(error);
-            // Handle specific database function error
             if (errorMessage.includes('column "password" of relation "users" does not exist') ||
                 errorMessage.includes('relation "users" does not exist')) {
                 
@@ -963,7 +998,7 @@ export const SalesTeamPage: React.FC = () => {
 
 // --- Calendar Page ---
 export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
-    const [events, setEvents] = useState<CalendarEvent[]>([]);
+    const [events, setEvents] = useState<any[]>([]); // Using 'any' to accommodate mixed types (appointments, bookings, birthdays)
     const [currentDate, setCurrentDate] = useState(new Date());
     const [isLoading, setIsLoading] = useState(true);
 
@@ -1023,12 +1058,28 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
                                     <span className={`text-sm font-bold self-start ${isToday ? 'bg-[var(--color-primary)] text-white rounded-full flex items-center justify-center h-7 w-7' : ''} ${isCurrentMonth ? 'text-slate-700' : 'text-slate-400'}`}>
                                         {d.getDate()}
                                     </span>
-                                    <div className="text-xs mt-1 space-y-1 overflow-y-auto flex-grow">
-                                        {dailyEvents.map(event => (
-                                            <div key={event.id} className="bg-sky-100 text-sky-800 p-1 rounded font-medium truncate">
-                                                {event.title}
-                                            </div>
-                                        ))}
+                                    <div className="text-xs mt-1 space-y-1 overflow-y-auto flex-grow custom-scrollbar">
+                                        {dailyEvents.map(event => {
+                                            // Determine style based on event type
+                                            let bgClass = "bg-sky-100 text-sky-800 border-sky-200";
+                                            if (event.type === 'booking') {
+                                                bgClass = "bg-green-100 text-green-800 border-green-200";
+                                            } else if (event.type === 'birthday') {
+                                                bgClass = "bg-pink-100 text-pink-800 border-pink-200";
+                                            }
+
+                                            return (
+                                                <div key={event.id} className={`${bgClass} p-1 rounded mb-1 shadow-sm border`}>
+                                                    <div className="font-bold truncate">{event.title}</div>
+                                                    {event.leads && event.type !== 'booking' && event.type !== 'birthday' && (
+                                                        <div className="truncate text-[10px] flex items-center opacity-80">
+                                                            <UsersIcon className="w-3 h-3 mr-1 inline" />
+                                                            {event.leads.name}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             )
@@ -1139,12 +1190,101 @@ export const SettingsPage: React.FC = () => {
 
 const SystemTriggers: React.FC = () => {
     const { addToast } = useToast();
-    const runCheck = (checkName: string) => {
+    const auth = useContext(AuthContext); // Need to access user for some fetch calls
+    
+    const runCheck = async (checkName: string) => {
         addToast(`กำลังรัน ${checkName}...`, 'info');
-        setTimeout(() => {
-             addToast(`${checkName} เสร็จสิ้น!`, 'success');
-        }, 2000);
+        
+        try {
+            if (checkName === "Check Birthdays") {
+                 const { today, thisMonth } = await getBirthdays();
+                 if (today.length > 0 || thisMonth.length > 0) {
+                     await sendLineNotification('birthday_report', { 
+                         birthdaysToday: today, 
+                         birthdaysMonth: thisMonth 
+                     });
+                     addToast(`ส่งรายงานวันเกิดเรียบร้อย (วันนี้ ${today.length}, เดือนนี้ ${thisMonth.length})`, 'success');
+                 } else {
+                     addToast('ไม่พบข้อมูลวันเกิดในช่วงนี้', 'info');
+                 }
+            } 
+            else if (checkName === "Check Idle Leads") {
+                const leads = await getLeads('admin'); // Fetch all leads
+                const now = new Date();
+                const tenMinutesAgo = new Date(now.getTime() - 10 * 60000);
+                
+                // Filter: Status is New or Uncalled AND Created more than 10 mins ago
+                const idleLeads = leads.filter(l => 
+                    (l.status === 'ใหม่' || l.status === 'ยังไม่ได้โทร') && 
+                    new Date(l.created_at) < tenMinutesAgo
+                );
+
+                if (idleLeads.length > 0) {
+                    await sendLineNotification('idle_leads', { leadsList: idleLeads });
+                    addToast(`ส่งแจ้งเตือน Lead ค้าง ${idleLeads.length} รายการ`, 'success');
+                } else {
+                    addToast('ไม่พบ Lead ที่ค้างเกิน 10 นาที', 'success');
+                }
+            }
+            else if (checkName === "Reassign Idle Leads") {
+                const leads = await getLeads('admin');
+                const now = new Date();
+                const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+                 // Filter: Status is New or Uncalled AND Created more than 24 hours ago
+                const overdueLeads = leads.filter(l => 
+                    (l.status === 'ใหม่' || l.status === 'ยังไม่ได้โทร') && 
+                    new Date(l.created_at) < oneDayAgo
+                );
+
+                if (overdueLeads.length > 0) {
+                     // In a real scenario, we would update the 'assigned_to' field here.
+                     // For now, we report them as "Processed for Reassignment"
+                    await sendLineNotification('reassign_leads', { leadsList: overdueLeads });
+                    addToast(`แจ้งเตือนการโอนย้าย Lead ${overdueLeads.length} รายการ`, 'success');
+                } else {
+                     addToast('ไม่พบ Lead ที่ค้างเกิน 24 ชั่วโมง', 'success');
+                }
+            }
+            else if (checkName === "Check Follow-ups") {
+                // Assuming admin checks for everyone, or current user check for themselves.
+                // Let's use 'admin' mode to check for ALL followups if the user is admin.
+                const userRole = auth?.user?.role || 'sales';
+                const userId = auth?.user?.id || '';
+                
+                const events = await getCalendarEvents(userRole === 'admin' ? 'admin' : 'sales', userId);
+                const todayStr = new Date().toDateString();
+                
+                const followUpsToday = events.filter(e => 
+                    new Date(e.start_time).toDateString() === todayStr
+                );
+
+                if (followUpsToday.length > 0) {
+                    await sendLineNotification('followup_reminder', { followUps: followUpsToday });
+                    addToast(`แจ้งเตือนนัดหมายวันนี้ ${followUpsToday.length} รายการ`, 'success');
+                } else {
+                    addToast('ไม่มีนัดหมายติดตามผลสำหรับวันนี้', 'info');
+                }
+            }
+            else if (checkName === "Test LINE") {
+                await sendLineNotification('test', {
+                    leadName: 'คุณสมชาย ทดสอบ',
+                    program: 'โปรแกรมยอดนิยม A',
+                    phone: '099-999-9999',
+                    status: 'ทดสอบ',
+                    salesName: 'Admin System',
+                    receivedDate: new Date().toISOString(),
+                    address: '123/45 ถนนสุขุมวิท เขตวัฒนา กรุงเทพฯ 10110',
+                    notes: 'ลูกค้าสนใจโปรโมชั่นพิเศษ และสะดวกให้ติดต่อกลับช่วงบ่าย'
+                });
+                addToast('ส่งข้อความทดสอบสำเร็จ', 'success');
+            }
+        } catch (e: any) {
+             addToast(`เกิดข้อผิดพลาด: ${getErrorMessage(e)}`, 'error');
+             console.error(e);
+        }
     };
+    
     return (
         <Card>
             <h2 className="text-xl font-bold mb-4">System Triggers (จำลองงานอัตโนมัติ)</h2>
@@ -1152,7 +1292,8 @@ const SystemTriggers: React.FC = () => {
                 <TriggerItem title="แจ้งเตือน Lead ค้าง (> 10 นาที)" description="ค้นหา Lead ที่ยังไม่ได้โทรและค้างเกิน 10 นาที" onRun={() => runCheck("Check Idle Leads")}/>
                 <TriggerItem title="เด้งงาน Lead ค้าง (> 24 ชม.)" description="ย้าย Lead ที่ยังไม่ได้โทรและค้างเกิน 24 ชั่วโมงให้เซลล์คนถัดไป" onRun={() => runCheck("Reassign Idle Leads")}/>
                 <TriggerItem title="เตือน Follow-Up (วันนี้)" description="ค้นหา Lead ที่มีนัดหมายติดตามผลในวันนี้" onRun={() => runCheck("Check Follow-ups")}/>
-                <TriggerItem title="Check Today's Birthdays" description="จำลองการตรวจสอบวันเกิดลูกค้าประจำวัน" onRun={() => runCheck("Check Birthdays")}/>
+                <TriggerItem title="Check Today's Birthdays" description="จำลองการตรวจสอบวันเกิดลูกค้าประจำวัน และส่ง LINE Notify" onRun={() => runCheck("Check Birthdays")}/>
+                <TriggerItem title="Test LINE Notification" description="ส่งข้อความทดสอบไปยัง LINE Group เพื่อตรวจสอบความสวยงาม" onRun={() => runCheck("Test LINE")}/>
             </div>
         </Card>
     );

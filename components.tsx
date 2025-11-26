@@ -265,7 +265,8 @@ export const Spinner: React.FC<{}> = () => (
 );
 
 // --- Form Components ---
-type LeadFormData = Omit<Database['public']['Tables']['leads']['Insert'], 'id' | 'created_at' | 'received_date' | 'last_update_date'>;
+// Allow received_date to be set
+type LeadFormData = Omit<Database['public']['Tables']['leads']['Insert'], 'id' | 'created_at' | 'last_update_date'>;
 
 export const LeadForm: React.FC<{ lead?: Lead | null, onSave: (leadData: LeadFormData, id?: number) => void, onCancel: () => void }> = ({ lead, onSave, onCancel }) => {
     const auth = useContext(AuthContext);
@@ -288,7 +289,8 @@ export const LeadForm: React.FC<{ lead?: Lead | null, onSave: (leadData: LeadFor
         birthday: lead?.birthday || null,
         address: lead?.address || '',
         value: lead?.value || 0,
-        notes: lead?.notes || ''
+        notes: lead?.notes || '',
+        received_date: lead?.received_date || new Date().toISOString().split('T')[0] // Default to today
     });
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -315,9 +317,16 @@ export const LeadForm: React.FC<{ lead?: Lead | null, onSave: (leadData: LeadFor
                 {programs.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
             </select>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input name="birthday" type="date" value={formData.birthday ?? ''} onChange={handleChange} className="w-full p-2 border rounded-lg" />
-                <input name="value" type="number" value={formData.value ?? ''} onChange={handleChange} placeholder="มูลค่า (บาท)" className="w-full p-2 border rounded-lg" />
+                <div>
+                     <label className="block text-xs text-slate-500 mb-1 ml-1">วันเกิด</label>
+                     <input name="birthday" type="date" value={formData.birthday ?? ''} onChange={handleChange} className="w-full p-2 border rounded-lg" />
+                </div>
+                 <div>
+                     <label className="block text-xs text-slate-500 mb-1 ml-1">วันที่จอง</label>
+                     <input name="received_date" type="date" value={formData.received_date ?? ''} onChange={handleChange} className="w-full p-2 border rounded-lg" required/>
+                </div>
             </div>
+            <input name="value" type="number" value={formData.value ?? ''} onChange={handleChange} placeholder="มูลค่า (บาท)" className="w-full p-2 border rounded-lg" />
             <input name="address" value={formData.address ?? ''} onChange={handleChange} placeholder="ที่อยู่" className="w-full p-2 border rounded-lg" />
             <select name="status" value={formData.status} onChange={handleChange} className="w-full p-2 border rounded-lg">
                 {leadStatuses.map(status => <option key={status} value={status}>{status}</option>)}
