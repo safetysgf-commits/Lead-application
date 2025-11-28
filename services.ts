@@ -841,7 +841,10 @@ begin
 end;
 $$;`;
 
-    const SQL_ADMIN_CREATE_USER = `-- Function for admin to create users
+    const SQL_ADMIN_CREATE_USER = `-- Enable pgcrypto if not already enabled
+create extension if not exists "pgcrypto";
+
+-- Function to create user
 create or replace function admin_create_user(email_input text, password_input text, full_name_input text, role_input text)
 returns uuid
 language plpgsql
@@ -850,16 +853,69 @@ as $$
 declare
   new_user_id uuid;
 begin
+  -- Check if user exists
+  if exists (select 1 from auth.users where email = email_input) then
+    raise exception 'User with this email already exists';
+  end if;
+
   -- Create user in auth.users
-  insert into auth.users (email, encrypted_password, email_confirmed_at, role)
-  values (email_input, crypt(password_input, gen_salt('bf')), now(), 'authenticated')
+  insert into auth.users (
+    instance_id,
+    id,
+    aud,
+    role,
+    email,
+    encrypted_password,
+    email_confirmed_at,
+    raw_app_meta_data,
+    raw_user_meta_data,
+    created_at,
+    updated_at
+  )
+  values (
+    '00000000-0000-0000-0000-000000000000',
+    gen_random_uuid(),
+    'authenticated',
+    'authenticated',
+    email_input,
+    crypt(password_input, gen_salt('bf')),
+    now(),
+    '{"provider":"email","providers":["email"]}',
+    json_build_object('full_name', full_name_input, 'role', role_input),
+    now(),
+    now()
+  )
   returning id into new_user_id;
 
-  -- Create profile in public.profiles (handled by trigger usually, but force it here if needed or update it)
-  -- Assuming trigger handles creation, we update the role/name
-  update public.profiles
-  set full_name = full_name_input, role = role_input
-  where id = new_user_id;
+  -- Create identity (Required for login to work properly)
+  insert into auth.identities (
+    id,
+    user_id,
+    identity_data,
+    provider,
+    provider_id,
+    last_sign_in_at,
+    created_at,
+    updated_at
+  )
+  values (
+    gen_random_uuid(),
+    new_user_id,
+    json_build_object('sub', new_user_id, 'email', email_input, 'email_verified', true, 'phone_verified', false),
+    'email',
+    new_user_id::text,
+    now(),
+    now(),
+    now()
+  );
+
+  -- Ensure profile exists (in case trigger didn't catch it or for robustness)
+  insert into public.profiles (id, full_name, role, email)
+  values (new_user_id, full_name_input, role_input, email_input)
+  on conflict (id) do update
+  set full_name = excluded.full_name,
+      role = excluded.role,
+      email = excluded.email;
 
   return new_user_id;
 end;
@@ -956,7 +1012,7 @@ $$;`;
             action: async (currentUserId?: string) => {
                  return { 
                     success: true, 
-                    details: "ตรวจสอบด้วยตัวเอง: หากสร้างผู้ใช้ไม่ได้ ให้ใช้ SQL ด้านล่างนี้แก้ไข", 
+                    details: "หากพบ Error 'provider_id' ให้คัดลอก SQL ด้านล่างไปรันใหม่ใน Supabase", 
                     fix: SQL_ADMIN_CREATE_USER 
                 };
             }

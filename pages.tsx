@@ -31,13 +31,19 @@ const getErrorMessage = (error: any): string => {
     // Handle Supabase error objects or generic Error objects
     if (error?.message) return error.message;
     if (error?.error_description) return error.error_description;
+    
     // Fallback to string representation if JSON fails or is empty
     try {
         const str = JSON.stringify(error);
-        return str === '{}' ? String(error) : str;
+        if (str !== '{}' && !str.includes('"[object Object]"')) return str;
     } catch (e) {
-        return String(error);
+        // ignore
     }
+    
+    // Last resort
+    return Object.prototype.toString.call(error) === '[object Object]' 
+        ? 'Unknown error object' 
+        : String(error);
 };
 
 // --- Auth Pages ---
@@ -953,7 +959,16 @@ export const SalesTeamPage: React.FC = () => {
             addToast('สร้างผู้ใช้ใหม่สำเร็จ', 'success');
             setIsAddUserModalOpen(false);
         } catch (error: any) {
-            addToast(`สร้างผู้ใช้ล้มเหลว: ${getErrorMessage(error)}`, 'error');
+            const errorMsg = getErrorMessage(error);
+            if (errorMsg.includes('Could not find the function public.admin_create_user') || errorMsg.includes('404')) {
+                addToast('ไม่พบฟังก์ชันสร้างผู้ใช้ในฐานข้อมูล', 'error');
+                addToast('กรุณาไปที่เมนู "ตั้งค่า" > "ทดสอบการตั้งค่า" เพื่อติดตั้งฟังก์ชันนี้', 'warning');
+            } else if (errorMsg.includes('provider_id')) {
+                addToast('ฟังก์ชันฐานข้อมูลล้าสมัย กรุณาอัปเดตผ่านเมนูตั้งค่า', 'error');
+                addToast('ไปที่ ตั้งค่า > ทดสอบการตั้งค่า > ข้อ 11 เพื่อรับคำสั่ง SQL แก้ไข', 'warning');
+            } else {
+                addToast(`สร้างผู้ใช้ล้มเหลว: ${errorMsg}`, 'error');
+            }
         }
     };
 
@@ -1087,11 +1102,13 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
                                     <div className="text-xs mt-1 space-y-1 overflow-y-auto flex-grow custom-scrollbar">
                                         {dailyEvents.map(event => {
                                             // Determine style based on event type
-                                            let bgClass = "bg-sky-100 text-sky-800 border-sky-200 hover:bg-sky-200";
+                                            // Updated: Appointment (Default)=Violet, Booking=Emerald, Birthday=Sky (Light Blue)
+                                            let bgClass = "bg-violet-100 text-violet-800 border-violet-200 hover:bg-violet-200"; // Default (Appointment)
+                                            
                                             if (event.type === 'booking') {
-                                                bgClass = "bg-green-100 text-green-800 border-green-200 hover:bg-green-200";
+                                                bgClass = "bg-emerald-100 text-emerald-800 border-emerald-200 hover:bg-emerald-200"; // Booking - Green/Emerald
                                             } else if (event.type === 'birthday') {
-                                                bgClass = "bg-pink-100 text-pink-800 border-pink-200 hover:bg-pink-200";
+                                                bgClass = "bg-sky-100 text-sky-800 border-sky-200 hover:bg-sky-200"; // Birthday - Light Blue (Requested)
                                             }
 
                                             return (
@@ -1130,15 +1147,15 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
                 {selectedEvent && (
                     <div className="space-y-4">
                         <div className={`p-4 rounded-xl border ${
-                            selectedEvent.type === 'birthday' ? 'bg-pink-50 border-pink-100' :
-                            selectedEvent.type === 'booking' ? 'bg-green-50 border-green-100' :
-                            'bg-sky-50 border-sky-100'
+                            selectedEvent.type === 'birthday' ? 'bg-sky-50 border-sky-100' : // Birthday -> Sky
+                            selectedEvent.type === 'booking' ? 'bg-emerald-50 border-emerald-100' : // Booking -> Emerald
+                            'bg-violet-50 border-violet-100' // Default -> Violet
                         }`}>
                             <div className="flex items-start">
                                 <div className={`p-2 rounded-full mr-4 ${
-                                    selectedEvent.type === 'birthday' ? 'bg-pink-200 text-pink-700' :
-                                    selectedEvent.type === 'booking' ? 'bg-green-200 text-green-700' :
-                                    'bg-sky-200 text-sky-700'
+                                    selectedEvent.type === 'birthday' ? 'bg-sky-200 text-sky-700' :
+                                    selectedEvent.type === 'booking' ? 'bg-emerald-200 text-emerald-700' :
+                                    'bg-violet-200 text-violet-700'
                                 }`}>
                                     {selectedEvent.type === 'birthday' ? <CakeIcon className="w-6 h-6"/> :
                                      selectedEvent.type === 'booking' ? <CheckCircleIcon className="w-6 h-6"/> :
