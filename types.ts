@@ -7,6 +7,8 @@ export interface User {
   email: string;
   role: Role;
   avatar: string;
+  status?: 'online' | 'offline';
+  last_active?: string;
 }
 
 export enum LeadStatus {
@@ -18,8 +20,18 @@ export enum LeadStatus {
   Lost = 'ยกเลิก',
 }
 
+export enum LeadSource {
+  Facebook = 'Facebook',
+  TikTok = 'TikTok',
+  Line = 'Line OA',
+  WalkIn = 'Walk-in',
+  Referral = 'บอกต่อ',
+  Other = 'อื่นๆ'
+}
+
 export type Lead = Database['public']['Tables']['leads']['Row'] & {
   profiles: { full_name: string } | null;
+  source?: string | null;
 };
 export type Salesperson = Database['public']['Tables']['profiles']['Row'];
 export type CalendarEvent = Database['public']['Tables']['calendar_events']['Row'];
@@ -40,7 +52,7 @@ export type SalespersonWithStats = Salesperson & {
 };
 
 
-export type Page = 'admin-dashboard' | 'sales-dashboard' | 'leads' | 'team' | 'calendar' | 'settings';
+export type Page = 'dashboard' | 'leads' | 'sell' | 'crm' | 'team' | 'calendar' | 'settings';
 
 export interface ToastMessage {
   id: number;
@@ -169,6 +181,7 @@ export type Database = {
           received_date: string
           status: Database["public"]["Enums"]["lead_status"]
           value: number | null
+          source: string | null
         }
         Insert: {
           address?: string | null
@@ -184,6 +197,7 @@ export type Database = {
           received_date?: string
           status?: Database["public"]["Enums"]["lead_status"]
           value?: number | null
+          source?: string | null
         }
         Update: {
           address?: string | null
@@ -199,6 +213,7 @@ export type Database = {
           received_date?: string
           status?: Database["public"]["Enums"]["lead_status"]
           value?: number | null
+          source?: string | null
         }
         Relationships: [
           {
@@ -236,6 +251,8 @@ export type Database = {
           id: string
           role: string
           updated_at: string | null
+          status: 'online' | 'offline' | null
+          last_active: string | null
         }
         Insert: {
           avatar_url?: string | null
@@ -244,6 +261,8 @@ export type Database = {
           id: string
           role?: string
           updated_at?: string | null
+          status?: 'online' | 'offline' | null
+          last_active?: string | null
         }
         Update: {
           avatar_url?: string | null
@@ -252,6 +271,8 @@ export type Database = {
           id?: string
           role?: string
           updated_at?: string | null
+          status?: 'online' | 'offline' | null
+          last_active?: string | null
         }
         Relationships: [
           {
