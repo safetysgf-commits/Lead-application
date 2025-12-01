@@ -8,13 +8,13 @@ import {
     exportToCSV, createFollowUpAppointments,
     adminCreateUser, updateUserPassword, deleteSalesperson, getSalesTeamPerformance, getBirthdays,
     SQL_CREATE_DEFAULT_ADMIN,
-    SQL_ADMIN_CREATE_USER
+    SQL_ADMIN_CREATE_USER, isUserOnline
 } from './services.ts';
 import {
     Card, StatCard, Button, Modal, Spinner, LeadForm, ActivityTimeline, 
     FunnelChart, SalesPerformanceChart,
     PlusIcon, EditIcon, TrashIcon, PhoneIcon, CalendarIcon, CheckCircleIcon, UsersIcon, FileDownloadIcon, InfoCircleIcon, XCircleIcon,
-    SalespersonForm, AddUserForm, ChangePasswordForm, ConnectionTest
+    SalespersonForm, AddUserForm, ChangePasswordForm, ConnectionTest, ChevronLeftIcon, ChevronRightIcon
 } from './components.tsx';
 import { useToast } from './hooks/useToast.tsx';
 
@@ -611,23 +611,26 @@ export const SalesTeamPage: React.FC = () => {
                 <Button onClick={() => setIsModalOpen(true)}><PlusIcon className="mr-1 w-5 h-5"/> เพิ่มผู้ใช้</Button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {team.map(member => (
-                    <Card key={member.id} className="flex items-center p-4">
-                        <div className="relative">
-                            <img src={member.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${member.full_name}`} className="w-12 h-12 rounded-full border border-slate-100" />
-                            <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${member.status === 'online' ? 'bg-green-500' : 'bg-slate-400'}`}></span>
-                        </div>
-                        <div className="ml-4 flex-1">
-                            <h3 className="font-bold text-slate-800">{member.full_name}</h3>
-                            <p className="text-xs text-slate-500 uppercase">{member.role}</p>
-                             <p className="text-xs text-slate-400 mt-1">
-                                {member.status === 'online' ? 'Online' : 'Offline'} 
-                                {member.last_active && ` (${new Date(member.last_active).toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'})})`}
-                            </p>
-                        </div>
-                        <button onClick={() => handleDelete(member.id)} className="text-slate-300 hover:text-red-500"><TrashIcon/></button>
-                    </Card>
-                ))}
+                {team.map(member => {
+                    const isOnline = isUserOnline(member);
+                    return (
+                        <Card key={member.id} className="flex items-center p-4">
+                            <div className="relative">
+                                <img src={member.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${member.full_name}`} className="w-12 h-12 rounded-full border border-slate-100" />
+                                <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${isOnline ? 'bg-[#cddc39]' : 'bg-[#e51c23]'}`}></span>
+                            </div>
+                            <div className="ml-4 flex-1">
+                                <h3 className="font-bold text-slate-800">{member.full_name}</h3>
+                                <p className="text-xs text-slate-500 uppercase">{member.role}</p>
+                                <p className="text-xs text-slate-400 mt-1">
+                                    {isOnline ? <span className="text-[#cddc39] font-bold">Online</span> : <span className="text-[#e51c23] font-bold">Offline</span>} 
+                                    {member.last_active && ` (${new Date(member.last_active).toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'})})`}
+                                </p>
+                            </div>
+                            <button onClick={() => handleDelete(member.id)} className="text-slate-300 hover:text-red-500"><TrashIcon/></button>
+                        </Card>
+                    );
+                })}
             </div>
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="เพิ่มผู้ใช้งานใหม่">
                 <AddUserForm onSave={handleCreateUser} onCancel={() => setIsModalOpen(false)} />
@@ -640,59 +643,146 @@ export const SalesTeamPage: React.FC = () => {
 export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
     const [events, setEvents] = useState<any[]>([]);
     const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
+    const [currentDate, setCurrentDate] = useState(new Date());
 
     useEffect(() => {
         getCalendarEvents(user.role === 'admin' ? 'admin' : 'sales', user.id).then(setEvents);
     }, [user]);
 
-    // Simple List View for Calendar (For brevity in this prompt, a full calendar UI would be large)
-    // In a real app, use 'react-big-calendar' or similar.
-    const sortedEvents = [...events].sort((a,b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+    const daysInMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    const firstDayOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+
+    const changeMonth = (offset: number) => {
+        const newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + offset, 1);
+        setCurrentDate(newDate);
+    };
+
+    const renderCalendarDays = () => {
+        const totalDays = daysInMonth(currentDate);
+        const startDay = firstDayOfMonth(currentDate);
+        const days = [];
+
+        // Padding for previous month
+        for (let i = 0; i < startDay; i++) {
+            days.push(<div key={`pad-${i}`} className="bg-slate-50/50 min-h-[100px] border border-slate-100/50"></div>);
+        }
+
+        // Days of current month
+        for (let day = 1; day <= totalDays; day++) {
+            const currentDayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+            const dayEvents = events.filter(e => {
+                const eDate = new Date(e.start_time);
+                return eDate.getDate() === day && eDate.getMonth() === currentDate.getMonth() && eDate.getFullYear() === currentDate.getFullYear();
+            });
+
+            const isToday = day === new Date().getDate() && currentDate.getMonth() === new Date().getMonth();
+
+            days.push(
+                <div key={day} className={`bg-white min-h-[100px] border border-slate-100 p-1 relative hover:bg-slate-50 transition-colors ${isToday ? 'bg-blue-50/30 ring-2 ring-inset ring-blue-200' : ''}`}>
+                    <div className={`text-right text-xs font-semibold mb-1 p-1 ${isToday ? 'text-blue-600' : 'text-slate-400'}`}>
+                        <span className={isToday ? "bg-blue-100 rounded-full w-6 h-6 flex items-center justify-center ml-auto" : ""}>{day}</span>
+                    </div>
+                    <div className="space-y-1 overflow-y-auto max-h-[80px] custom-scrollbar">
+                        {dayEvents.map((event, idx) => {
+                            const isBirthday = event.type === 'birthday';
+                            const isBooking = event.type === 'booking';
+                            
+                            let bgClass = "bg-purple-100 text-purple-700 border-l-2 border-purple-500";
+                            if (isBirthday) bgClass = "bg-sky-100 text-sky-700 border-l-2 border-sky-400"; // Birthday = Light Blue/Sky
+                            if (isBooking) bgClass = "bg-emerald-100 text-emerald-700 border-l-2 border-emerald-500"; // Booking = Green
+
+                            return (
+                                <div 
+                                    key={event.id || idx} 
+                                    onClick={() => setSelectedEvent(event)}
+                                    className={`text-[10px] p-1 rounded cursor-pointer truncate shadow-sm hover:opacity-80 ${bgClass}`}
+                                    title={event.title}
+                                >
+                                    {isBirthday ? '🎂 ' : ''}{event.title}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+        return days;
+    };
 
     return (
         <div className="space-y-6">
-            <h1 className="text-2xl font-bold text-slate-800">ปฏิทินนัดหมาย</h1>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-4">
-                    {sortedEvents.map(event => {
-                         const isBirthday = event.type === 'birthday';
-                         const isBooking = event.type === 'booking';
-                         const date = new Date(event.start_time);
-                         
-                         return (
-                            <div key={event.id} onClick={() => setSelectedEvent(event)} className={`p-4 rounded-xl border-l-4 shadow-sm bg-white cursor-pointer hover:shadow-md transition-all flex items-center ${isBirthday ? 'border-l-pink-400' : isBooking ? 'border-l-green-500' : 'border-l-purple-500'}`}>
-                                <div className="mr-4 text-center min-w-[50px]">
-                                    <p className="text-xs text-slate-500 uppercase">{date.toLocaleDateString('en-US', {month:'short'})}</p>
-                                    <p className="text-xl font-bold text-slate-800">{date.getDate()}</p>
-                                </div>
-                                <div>
-                                    <h4 className="font-bold text-slate-800">{event.title}</h4>
-                                    <p className="text-sm text-slate-500">{date.toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'})} - {event.leads?.name || 'Unknown'}</p>
-                                </div>
-                            </div>
-                         );
-                    })}
-                    {sortedEvents.length === 0 && <p className="text-center text-slate-400 py-10">ไม่มีรายการในปฏิทิน</p>}
-                </div>
-                <div>
-                     <Card className="p-4 sticky top-24">
-                        <h3 className="font-bold mb-4">ประเภทงาน</h3>
-                        <div className="space-y-2 text-sm">
-                            <div className="flex items-center"><span className="w-3 h-3 rounded-full bg-pink-400 mr-2"></span> วันเกิดลูกค้า</div>
-                            <div className="flex items-center"><span className="w-3 h-3 rounded-full bg-green-500 mr-2"></span> วันที่จอง (Sell)</div>
-                            <div className="flex items-center"><span className="w-3 h-3 rounded-full bg-purple-500 mr-2"></span> นัดหมายติดตาม (CRM)</div>
-                        </div>
-                     </Card>
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                <h1 className="text-2xl font-bold text-slate-800">ปฏิทินนัดหมาย</h1>
+                
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 text-xs bg-white p-2 rounded-xl shadow-sm border border-slate-100">
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-full bg-sky-300 mr-2"></span> วันเกิดลูกค้า</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-full bg-emerald-500 mr-2"></span> วันที่จอง (Sell)</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-full bg-purple-500 mr-2"></span> นัดหมายติดตาม (CRM)</div>
                 </div>
             </div>
+
+            <Card className="p-0 overflow-hidden" noPadding>
+                {/* Header Navigation */}
+                <div className="flex items-center justify-between p-4 bg-white border-b border-slate-100">
+                    <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                        <ChevronLeftIcon className="w-5 h-5 text-slate-500"/>
+                    </button>
+                    <h2 className="text-lg font-bold text-slate-700">
+                        {currentDate.toLocaleDateString('th-TH', { month: 'long', year: 'numeric' })}
+                    </h2>
+                    <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                        <ChevronRightIcon className="w-5 h-5 text-slate-500"/>
+                    </button>
+                </div>
+
+                {/* Days Header */}
+                <div className="grid grid-cols-7 bg-slate-50 border-b border-slate-100">
+                    {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map((day, i) => (
+                        <div key={i} className={`py-3 text-center text-xs font-bold ${i===0||i===6 ? 'text-red-400':'text-slate-500'}`}>
+                            {day}
+                        </div>
+                    ))}
+                </div>
+
+                {/* Calendar Grid */}
+                <div className="grid grid-cols-7 bg-slate-100 gap-px border-b border-slate-100">
+                    {renderCalendarDays()}
+                </div>
+            </Card>
 
             <Modal isOpen={!!selectedEvent} onClose={() => setSelectedEvent(null)} title="รายละเอียด">
                 {selectedEvent && (
                     <div className="space-y-4">
-                        <h3 className="text-lg font-bold text-[#4DA6FF]">{selectedEvent.title}</h3>
-                        <p><strong>เวลา:</strong> {new Date(selectedEvent.start_time).toLocaleString('th-TH')}</p>
-                        <p><strong>ลูกค้า:</strong> {selectedEvent.leads?.name}</p>
-                        <p className="text-sm text-slate-500 mt-4">ประเภท: {selectedEvent.type || 'นัดหมายทั่วไป'}</p>
+                        <div className={`p-4 rounded-xl mb-4 ${
+                            selectedEvent.type === 'birthday' ? 'bg-sky-50 text-sky-800 border border-sky-100' :
+                            selectedEvent.type === 'booking' ? 'bg-emerald-50 text-emerald-800 border border-emerald-100' :
+                            'bg-purple-50 text-purple-800 border border-purple-100'
+                        }`}>
+                             <h3 className="text-lg font-bold">{selectedEvent.title}</h3>
+                             <p className="text-sm opacity-80">{selectedEvent.type === 'birthday' ? 'วันเกิดลูกค้า' : selectedEvent.type === 'booking' ? 'วันที่ลงจองสินค้า' : 'นัดหมายติดตามผล'}</p>
+                        </div>
+                        
+                        <div className="space-y-2 text-sm text-slate-600">
+                            <p className="flex justify-between border-b border-slate-100 pb-2">
+                                <span>เวลา:</span> 
+                                <span className="font-medium text-slate-800">{new Date(selectedEvent.start_time).toLocaleString('th-TH')}</span>
+                            </p>
+                            <p className="flex justify-between border-b border-slate-100 pb-2">
+                                <span>ลูกค้า:</span> 
+                                <span className="font-medium text-slate-800">{selectedEvent.leads?.name || 'ไม่ระบุ'}</span>
+                            </p>
+                            {selectedEvent.leads?.full_name && (
+                                <p className="flex justify-between border-b border-slate-100 pb-2">
+                                    <span>ผู้รับผิดชอบ:</span> 
+                                    <span className="font-medium text-slate-800">{selectedEvent.leads.full_name}</span>
+                                </p>
+                            )}
+                        </div>
+                        
+                        <div className="flex justify-end pt-4">
+                            <Button onClick={() => setSelectedEvent(null)} variant="secondary">ปิด</Button>
+                        </div>
                     </div>
                 )}
             </Modal>

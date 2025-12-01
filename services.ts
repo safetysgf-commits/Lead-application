@@ -294,6 +294,20 @@ END $$;
 
 // --- Data Services ---
 
+// Helper function to check online status (5 min threshold)
+export const isUserOnline = (user: { status?: string | null, last_active?: string | null }): boolean => {
+    if (user.status === 'offline') return false;
+    if (!user.last_active) return false;
+    
+    const lastActive = new Date(user.last_active);
+    const now = new Date();
+    const diffMs = now.getTime() - lastActive.getTime();
+    const diffMins = diffMs / (1000 * 60);
+    
+    // User is online only if status is 'online' AND active within last 5 mins
+    return diffMins < 5;
+};
+
 export const getLeads = async (role: 'admin' | 'sales', userId?: string) => {
     let query = supabase
       .from('leads')
@@ -485,73 +499,40 @@ export const createFollowUpAppointments = async (leadId: number, salespersonId: 
 };
 
 export const getDashboardStats = async (role: 'admin' | 'sales', userId?: string, dateRange?: { start: string, end: string }) => {
-    // 1. Fetch ALL leads to determine Totals properly
-    let query = supabase.from('leads').select('value, status, created_at, assigned_to');
-    
-    // For specific date range filtering for REPORTS
-    // But we want "Total Leads" to usually be All-Time, while graphs respect date range.
-    // The previous implementation filtered EVERYTHING by today, which resulted in 0.
-    // Let's fetch everything first (for small scale app this is fine), then filter in memory.
-    
-    if (role === 'sales' && userId) {
-        query = query.eq('assigned_to', userId);
-    }
+    if(role === 'admin') {
+        let leadsQuery = supabase.from('leads').select('value, status, created_at');
+        if (dateRange) {
+            leadsQuery = leadsQuery.gte('created_at', dateRange.start).lte('created_at', dateRange.end);
+        }
+        const { data: leads, error: leadsError } = await leadsQuery;
+        if (leadsError) throw leadsError;
 
-    const { data: allLeads, error } = await query;
-    if (error) throw error;
-
-    const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('role', ['sales', 'after_care']);
-
-    // Date Filtering for specific "New Today" or Graph logic
-    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-    const rangeStart = dateRange ? new Date(dateRange.start) : new Date(0); // Default to beginning of time if no range
-    const rangeEnd = dateRange ? new Date(dateRange.end) : new Date();
-
-    // Filter leads by requested range for "Performance" stats
-    const leadsInRange = allLeads.filter(l => {
-        const d = new Date(l.created_at);
-        return d >= rangeStart && d <= rangeEnd;
-    });
-
-    // Counts
-    const totalLeads = allLeads.length; // All time
-    const newLeadsToday = allLeads.filter(l => new Date(l.created_at) >= todayStart).length;
-    const sellCount = allLeads.filter(l => [LeadStatus.New, LeadStatus.Uncalled, LeadStatus.FollowUp, LeadStatus.Contacted].includes(l.status as LeadStatus)).length;
-    const crmCount = allLeads.filter(l => l.status === LeadStatus.Won).length;
-    const totalValue = allLeads.filter(l => l.status === LeadStatus.Won).reduce((sum, l) => sum + (l.value || 0), 0);
-
-    // Group by Salesperson (from leadsInRange or allLeads? User wants "Summary Today and Month")
-    // Let's provide breakdown based on ALL leads to show backlog, but maybe sales based on range?
-    // Let's stick to "Current State" for backlog counts, and "Range" for sales value.
-
-    const leadsByPerson = profiles?.map(p => {
-        const myLeads = allLeads.filter(l => l.assigned_to === p.id);
-        const myWon = myLeads.filter(l => l.status === LeadStatus.Won);
+        const { count: teamSize, error: teamError } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+        if (teamError) throw teamError;
+        
+        const wonLeads = leads.filter(l => l.status === LeadStatus.Won);
+        
         return {
-            name: p.full_name,
-            total: myLeads.length,
-            won: myWon.length,
-            value: myWon.reduce((s,l) => s + (l.value||0), 0),
-            backlog: myLeads.filter(l => l.status !== LeadStatus.Won && l.status !== LeadStatus.Lost).length
-        };
-    }) || [];
+            totalLeads: leads.length,
+            newLeads: leads.filter(l => new Date(l.created_at) >= new Date(new Date().toDateString())).length,
+            totalValue: wonLeads.reduce((sum, lead) => sum + (lead.value || 0), 0),
+            teamSize: teamSize ?? 0,
+            conversionRate: leads.length > 0 ? Math.round((wonLeads.length / leads.length) * 100) : 0,
+        }
+    } else {
+        const { data: salesLeads, error } = await supabase.from('leads').select('status, value').eq('assigned_to', userId!);
+        if (error) throw error;
 
-    const leadsByStatus = Object.values(LeadStatus).map(s => ({
-        status: s,
-        count: allLeads.filter(l => l.status === s).length
-    }));
+        const wonLeads = salesLeads.filter(l => l.status === LeadStatus.Won);
+        const monthlySales = wonLeads.reduce((sum, lead) => sum + (lead.value || 0), 0);
 
-    return {
-        totalLeads,
-        newLeads: newLeadsToday,
-        sellCount,
-        crmCount,
-        totalValue,
-        teamSize: profiles?.length || 0,
-        leadsByPerson,
-        leadsByStatus,
-        conversionRate: totalLeads > 0 ? Math.round((crmCount / totalLeads) * 100) : 0
-    };
+        return {
+            totalLeads: salesLeads.length,
+            uncalledLeads: salesLeads.filter(l => l.status === LeadStatus.Uncalled).length,
+            monthlySales: monthlySales,
+            conversionRate: salesLeads.length > 0 ? Math.round((wonLeads.length / salesLeads.length) * 100) : 0
+        }
+    }
 };
 
 export const getSalesPerformance = async (dateRange?: { start: string, end: string }) => {

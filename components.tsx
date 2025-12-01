@@ -3,7 +3,7 @@ import React, { useState, useContext, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, AreaChart, Area } from 'recharts';
 import { AuthContext } from './context.ts';
 import { User, Page, Lead, Salesperson, LeadStatus, ConnectionTestResult, Database, LeadActivity, Role, Program, SalespersonWithStats, LeadSource } from './types.ts';
-import { statusColors, leadStatuses, runConnectionTest, getSalesTeam, updateUserPassword, getPrograms, updateUserStatus } from './services.ts';
+import { statusColors, leadStatuses, runConnectionTest, getSalesTeam, updateUserPassword, getPrograms, updateUserStatus, isUserOnline } from './services.ts';
 import { useToast } from './hooks/useToast.tsx';
 
 // --- Icons (Clean Line Style) ---
@@ -110,7 +110,17 @@ export const TeamIcon: React.FC<{className?: string}> = ({className}) => (
         <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 5.223m0 0a5.971 5.971 0 00.941 3.197M13.5 2.25h-3c-1.313 0-2.619.198-3.87.576a2.625 2.625 0 00-1.87 2.518v.75c0 .414.336.75.75.75h9c.414 0 .75-.336.75-.75v-.75a2.625 2.625 0 00-1.87-2.518c-1.251-.378-2.557-.576-3.87-.576z" />
     </svg>
 );
+export const ChevronLeftIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-6 h-6"}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+    </svg>
+);
 
+export const ChevronRightIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-6 h-6"}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+    </svg>
+);
 
 // --- Layout Components ---
 
@@ -150,7 +160,7 @@ export const Header: React.FC<{ user: User, onLogout: () => void, notificationCo
             <div className="flex items-center">
                 <div className="relative">
                     <img src={user.avatar} alt="User Avatar" className="w-10 h-10 md:w-12 md:h-12 rounded-full mr-4 border-2 border-white shadow-sm" />
-                     <span className={`absolute bottom-0 right-4 block h-3 w-3 rounded-full ring-2 ring-white ${status === 'online' ? 'bg-green-500' : 'bg-slate-400'}`}></span>
+                     <span className={`absolute bottom-0 right-4 block h-3 w-3 rounded-full ring-2 ring-white ${status === 'online' ? 'bg-[#cddc39]' : 'bg-[#e51c23]'}`}></span>
                 </div>
                 <div>
                     <p className="font-bold text-md text-slate-800 tracking-tight">Lead CRM</p>
@@ -159,12 +169,12 @@ export const Header: React.FC<{ user: User, onLogout: () => void, notificationCo
             </div>
             <div className="flex items-center space-x-5">
                 <div className="flex items-center space-x-2">
-                    <span className={`hidden md:inline text-xs font-medium ${status === 'online' ? 'text-green-600' : 'text-slate-500'}`}>
+                    <span className={`hidden md:inline text-xs font-bold ${status === 'online' ? 'text-[#cddc39]' : 'text-[#e51c23]'}`}>
                         {status === 'online' ? 'Online' : 'Offline'}
                     </span>
                     <button 
                         onClick={toggleStatus}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#4DA6FF] ${status === 'online' ? 'bg-green-500' : 'bg-slate-300'}`}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#cddc39] ${status === 'online' ? 'bg-[#cddc39]' : 'bg-[#e51c23]'}`}
                     >
                         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${status === 'online' ? 'translate-x-6' : 'translate-x-1'}`} />
                     </button>
@@ -293,28 +303,6 @@ export const Spinner: React.FC<{}> = () => (
 // --- Form Components ---
 
 type LeadFormData = Omit<Database['public']['Tables']['leads']['Insert'], 'id' | 'created_at' | 'last_update_date'>;
-
-// Helper to determine real online status
-const isUserOnline = (user: Salesperson | User) => {
-    // If user marked 'offline', they are offline
-    if (user.status === 'offline') return false;
-    
-    // If marked 'online', check last_active
-    // If last_active > 5 mins ago, they are offline
-    if (user.last_active) {
-        const lastActive = new Date(user.last_active);
-        const now = new Date();
-        const diffMs = now.getTime() - lastActive.getTime();
-        const diffMins = diffMs / (1000 * 60);
-        if (diffMins > 5) return false;
-    } else {
-        // If no last_active but status is online (legacy/bug), treat as offline if safe?
-        // Or leniently treat as online. Let's be strict: no last_active = offline
-        return false;
-    }
-    
-    return true;
-};
 
 export const LeadForm: React.FC<{ lead?: Lead | null, onSave: (leadData: LeadFormData, id?: number) => void, onCancel: () => void }> = ({ lead, onSave, onCancel }) => {
     const auth = useContext(AuthContext);
