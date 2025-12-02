@@ -741,7 +741,7 @@ export const SalesTeamPage: React.FC = () => {
                     <div className="space-y-6">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <StatCard title="Lead ทั้งหมด" value={kpiStats.totalLeads} icon={<UsersIcon className="text-slate-500"/>} colorClass="bg-slate-50" />
-                            <StatCard title="สำเร็จ (Won)" value={kpiStats.wonLeads || 0} icon={<CheckCircleIcon className="text-green-500"/>} colorClass="bg-green-50" />
+                            <StatCard title="รอติดตาม" value={kpiStats.uncalledLeads} icon={<PhoneIcon className="text-orange-500"/>} colorClass="bg-orange-50" />
                             <StatCard title="ยอดขาย (เดือนนี้)" value={`฿${kpiStats.monthlySales.toLocaleString()}`} icon={<CheckCircleIcon className="text-green-500"/>} colorClass="bg-green-50" />
                             <StatCard title="Conversion Rate" value={`${kpiStats.conversionRate}%`} icon={<ChartBarIcon className="text-blue-500"/>} colorClass="bg-blue-50" />
                         </div>
@@ -859,7 +859,7 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
                                     className={`text-[10px] p-1 rounded cursor-pointer truncate shadow-sm hover:opacity-80 ${bgClass}`}
                                     title={event.title}
                                 >
-                                    {isBirthday ? '🎂 ' : isBooking ? '✅ ' : '📅 '}{event.title}
+                                    {isBirthday ? '🎂 ' : ''}{event.title}
                                 </div>
                             );
                         })}
