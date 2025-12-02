@@ -8,13 +8,14 @@ import {
     exportToCSV, createFollowUpAppointments,
     adminCreateUser, updateUserPassword, deleteSalesperson, getSalesTeamPerformance, getBirthdays,
     SQL_CREATE_DEFAULT_ADMIN,
-    SQL_ADMIN_CREATE_USER, isUserOnline
+    SQL_ADMIN_CREATE_USER, isUserOnline, updateSalesperson,
+    SQL_FIX_ROLE_CONSTRAINT
 } from './services.ts';
 import {
     Card, StatCard, Button, Modal, Spinner, LeadForm, ActivityTimeline, 
     FunnelChart, SalesPerformanceChart,
     PlusIcon, EditIcon, TrashIcon, PhoneIcon, CalendarIcon, CheckCircleIcon, UsersIcon, FileDownloadIcon, InfoCircleIcon, XCircleIcon,
-    SalespersonForm, AddUserForm, ChangePasswordForm, ConnectionTest, ChevronLeftIcon, ChevronRightIcon
+    SalespersonForm, AddUserForm, ChangePasswordForm, ConnectionTest, ChevronLeftIcon, ChevronRightIcon, ChartBarIcon, UserForm
 } from './components.tsx';
 import { useToast } from './hooks/useToast.tsx';
 
@@ -577,20 +578,57 @@ export const CRMPage: React.FC<{ user: User }> = ({ user }) => {
 // --- Sales Team ---
 export const SalesTeamPage: React.FC = () => {
     const [team, setTeam] = useState<Salesperson[]>([]);
-    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+    const [editingUser, setEditingUser] = useState<Salesperson | null>(null);
+    const [viewingKPIUser, setViewingKPIUser] = useState<Salesperson | null>(null);
+    const [kpiStats, setKpiStats] = useState<any>(null);
     const { addToast } = useToast();
+    
+    // New state for fix logic
+    const [showRoleFixModal, setShowRoleFixModal] = useState(false);
 
-    const fetchTeam = async () => {
+    const fetchTeam = useCallback(async () => {
         const data = await getSalesTeam();
         setTeam(data);
-    };
-    useEffect(() => { fetchTeam(); }, []);
+    }, []);
 
+    useEffect(() => { fetchTeam(); }, [fetchTeam]);
+
+    // Create User
     const handleCreateUser = async (data: any) => {
         try {
             await adminCreateUser(data);
             addToast('สร้างผู้ใช้สำเร็จ', 'success');
-            setIsModalOpen(false);
+            setIsAddModalOpen(false);
+            fetchTeam();
+        } catch (e: any) { 
+            const msg = getErrorMessage(e);
+            
+            // Handle specific role constraint violation
+            if (msg.includes('valid_role') || msg.includes('violates check constraint')) {
+                setShowRoleFixModal(true);
+            } else if (msg.includes('provider_id')) {
+                // Should be handled by adminCreateUser function check if possible, or show fix modal too
+                addToast("Error: Database Trigger/Constraint Issue. See settings.", 'error');
+            } else {
+                addToast(msg, 'error');
+            }
+        }
+    }
+
+    // Edit User
+    const handleUpdateUser = async (data: any) => {
+        if (!editingUser) return;
+        try {
+            // Update profile info (Name, Role)
+            await updateSalesperson(editingUser.id, {
+                full_name: data.fullName,
+                role: data.role
+            });
+            
+            // Password change is handled inside the form via callback if triggered
+            addToast('แก้ไขข้อมูลสำเร็จ', 'success');
+            setEditingUser(null);
             fetchTeam();
         } catch (e) { addToast(getErrorMessage(e), 'error'); }
     }
@@ -604,36 +642,159 @@ export const SalesTeamPage: React.FC = () => {
         } catch(e) { addToast(getErrorMessage(e), 'error'); }
     }
 
+    // KPI Logic
+    const handleViewKPI = async (user: Salesperson) => {
+        setViewingKPIUser(user);
+        setKpiStats(null); // Reset prev stats
+        try {
+            // Re-use getDashboardStats but forced for a specific user ID as 'sales' role view
+            const stats = await getDashboardStats('sales', user.id);
+            setKpiStats(stats);
+        } catch (e) {
+            addToast('ไม่สามารถดึงข้อมูล KPI ได้', 'error');
+            setViewingKPIUser(null);
+        }
+    }
+
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold text-slate-800">ทีมงาน (Users)</h1>
-                <Button onClick={() => setIsModalOpen(true)}><PlusIcon className="mr-1 w-5 h-5"/> เพิ่มผู้ใช้</Button>
+                <Button onClick={() => setIsAddModalOpen(true)}><PlusIcon className="mr-1 w-5 h-5"/> เพิ่มผู้ใช้</Button>
             </div>
+            
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {team.map(member => {
                     const isOnline = isUserOnline(member);
                     return (
-                        <Card key={member.id} className="flex items-center p-4">
-                            <div className="relative">
-                                <img src={member.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${member.full_name}`} className="w-12 h-12 rounded-full border border-slate-100" />
-                                <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${isOnline ? 'bg-[#cddc39]' : 'bg-[#e51c23]'}`}></span>
+                        <Card key={member.id} className="p-4 relative group">
+                            <div className="flex items-center">
+                                <div className="relative">
+                                    <img src={member.avatar_url || `https://api.dicebear.com/8.x/initials/svg?seed=${member.full_name}`} className="w-12 h-12 rounded-full border border-slate-100" />
+                                    <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${isOnline ? 'bg-[#cddc39]' : 'bg-[#e51c23]'}`}></span>
+                                </div>
+                                <div className="ml-4 flex-1">
+                                    <h3 className="font-bold text-slate-800">{member.full_name}</h3>
+                                    <p className="text-xs text-slate-500 uppercase">{member.role}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        {isOnline ? <span className="text-[#cddc39] font-bold">Online</span> : <span className="text-[#e51c23] font-bold">Offline</span>} 
+                                        {member.last_active && ` (${new Date(member.last_active).toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'})})`}
+                                    </p>
+                                </div>
                             </div>
-                            <div className="ml-4 flex-1">
-                                <h3 className="font-bold text-slate-800">{member.full_name}</h3>
-                                <p className="text-xs text-slate-500 uppercase">{member.role}</p>
-                                <p className="text-xs text-slate-400 mt-1">
-                                    {isOnline ? <span className="text-[#cddc39] font-bold">Online</span> : <span className="text-[#e51c23] font-bold">Offline</span>} 
-                                    {member.last_active && ` (${new Date(member.last_active).toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'})})`}
-                                </p>
+                            
+                            {/* Action Buttons */}
+                            <div className="mt-4 pt-3 border-t border-slate-50 flex justify-end gap-2">
+                                <button 
+                                    onClick={() => handleViewKPI(member)} 
+                                    className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                                    title="ดู KPI"
+                                >
+                                    <ChartBarIcon className="w-5 h-5" />
+                                </button>
+                                <button 
+                                    onClick={() => setEditingUser(member)} 
+                                    className="p-1.5 text-slate-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
+                                    title="แก้ไขข้อมูล"
+                                >
+                                    <EditIcon className="w-5 h-5" />
+                                </button>
+                                <button 
+                                    onClick={() => handleDelete(member.id)} 
+                                    className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                    title="ลบผู้ใช้"
+                                >
+                                    <TrashIcon className="w-5 h-5" />
+                                </button>
                             </div>
-                            <button onClick={() => handleDelete(member.id)} className="text-slate-300 hover:text-red-500"><TrashIcon/></button>
                         </Card>
                     );
                 })}
             </div>
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="เพิ่มผู้ใช้งานใหม่">
-                <AddUserForm onSave={handleCreateUser} onCancel={() => setIsModalOpen(false)} />
+
+            {/* Add User Modal */}
+            <Modal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} title="เพิ่มผู้ใช้งานใหม่">
+                <UserForm onSave={handleCreateUser} onCancel={() => setIsAddModalOpen(false)} />
+            </Modal>
+
+            {/* Edit User Modal */}
+            <Modal isOpen={!!editingUser} onClose={() => setEditingUser(null)} title="แก้ไขข้อมูลผู้ใช้">
+                {editingUser && (
+                    <UserForm 
+                        initialData={{
+                            fullName: editingUser.full_name || '',
+                            email: editingUser.email || '',
+                            role: editingUser.role,
+                            id: editingUser.id
+                        }}
+                        isEdit={true}
+                        onSave={handleUpdateUser} 
+                        onCancel={() => setEditingUser(null)} 
+                        onResetPassword={(newPass) => updateUserPassword(editingUser.id, newPass)}
+                    />
+                )}
+            </Modal>
+
+            {/* Individual KPI Modal */}
+            <Modal isOpen={!!viewingKPIUser} onClose={() => setViewingKPIUser(null)} title={`KPI: ${viewingKPIUser?.full_name}`} size="xl">
+                {kpiStats ? (
+                    <div className="space-y-6">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <StatCard title="Lead ทั้งหมด" value={kpiStats.totalLeads} icon={<UsersIcon className="text-slate-500"/>} colorClass="bg-slate-50" />
+                            <StatCard title="รอติดตาม" value={kpiStats.uncalledLeads} icon={<PhoneIcon className="text-orange-500"/>} colorClass="bg-orange-50" />
+                            <StatCard title="ยอดขาย (เดือนนี้)" value={`฿${kpiStats.monthlySales.toLocaleString()}`} icon={<CheckCircleIcon className="text-green-500"/>} colorClass="bg-green-50" />
+                            <StatCard title="Conversion Rate" value={`${kpiStats.conversionRate}%`} icon={<ChartBarIcon className="text-blue-500"/>} colorClass="bg-blue-50" />
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <FunnelChart data={[
+                                { name: 'Lead ทั้งหมด', value: kpiStats.totalLeads, fill: '#94a3b8' },
+                                { name: 'รอดำเนินการ', value: kpiStats.uncalledLeads, fill: '#fb923c' },
+                                { name: 'ปิดการขายสำเร็จ', value: (kpiStats.totalLeads * kpiStats.conversionRate / 100), fill: '#34d399' }
+                            ]} />
+                            <Card className="p-4" noPadding>
+                                <div className="p-4 border-b border-slate-100"><h3 className="font-bold text-slate-700">ประสิทธิภาพ</h3></div>
+                                <div className="p-6 text-center">
+                                    <div className="inline-flex items-center justify-center w-24 h-24 rounded-full border-4 border-blue-100 bg-white">
+                                        <span className="text-2xl font-bold text-blue-600">{kpiStats.conversionRate}%</span>
+                                    </div>
+                                    <p className="mt-4 text-slate-500 text-sm">อัตราการปิดการขายสำเร็จ</p>
+                                </div>
+                            </Card>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="p-10 text-center"><Spinner /></div>
+                )}
+            </Modal>
+
+            {/* Role Constraint Fix Modal */}
+            <Modal isOpen={showRoleFixModal} onClose={() => setShowRoleFixModal(false)} title="🛠️ แก้ไขปัญหา Role Constraint">
+                <div className="space-y-4">
+                    <p className="text-sm text-slate-600">
+                        เกิดข้อผิดพลาดในการสร้างผู้ใช้เนื่องจากข้อกำหนดในฐานข้อมูลไม่ตรงกับระบบ (Constraint Violation: valid_role).
+                    </p>
+                    <p className="text-sm text-slate-600">
+                        กรุณาคัดลอก SQL Code ด้านล่าง ไปรันใน <strong>Supabase SQL Editor</strong> เพื่อแก้ไข
+                    </p>
+                    <div className="relative">
+                        <pre className="bg-slate-800 text-green-400 p-4 rounded-xl text-xs overflow-x-auto">
+                            {SQL_FIX_ROLE_CONSTRAINT}
+                        </pre>
+                        <button 
+                            onClick={() => {
+                                navigator.clipboard.writeText(SQL_FIX_ROLE_CONSTRAINT);
+                                addToast('คัดลอก SQL แล้ว', 'success');
+                            }}
+                            className="absolute top-2 right-2 bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded-lg text-xs"
+                        >
+                            Copy
+                        </button>
+                    </div>
+                    <div className="flex justify-end">
+                        <Button onClick={() => setShowRoleFixModal(false)}>ปิด</Button>
+                    </div>
+                </div>
             </Modal>
         </div>
     );

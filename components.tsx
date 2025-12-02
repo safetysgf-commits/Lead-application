@@ -110,6 +110,12 @@ export const TeamIcon: React.FC<{className?: string}> = ({className}) => (
         <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 5.223m0 0a5.971 5.971 0 00.941 3.197M13.5 2.25h-3c-1.313 0-2.619.198-3.87.576a2.625 2.625 0 00-1.87 2.518v.75c0 .414.336.75.75.75h9c.414 0 .75-.336.75-.75v-.75a2.625 2.625 0 00-1.87-2.518c-1.251-.378-2.557-.576-3.87-.576z" />
     </svg>
 );
+export const ChartBarIcon: React.FC<{className?: string}> = ({className}) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-6 h-6"}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+    </svg>
+);
+
 export const ChevronLeftIcon: React.FC<{ className?: string }> = ({ className }) => (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className || "w-6 h-6"}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
@@ -448,10 +454,8 @@ export const LeadForm: React.FC<{ lead?: Lead | null, onSave: (leadData: LeadFor
     );
 };
 
-// ... (Other Forms: SalespersonForm, AddUserForm, etc. remain largely same but style updated via Button component) ...
-
 export const SalespersonForm: React.FC<{ salesperson?: Salesperson | null, onSave: (data: any, id?: string) => void, onCancel: () => void, onChangePassword: (userId: string) => void }> = ({ salesperson, onSave, onCancel, onChangePassword }) => {
-    // ... Simplified for brevity, reusing Button component styles ...
+    // Legacy component wrapper - better to use the new UserForm below for robustness
     const [formData, setFormData] = useState({
         full_name: salesperson?.full_name || '',
         email: salesperson?.email || '',
@@ -479,24 +483,106 @@ export const SalespersonForm: React.FC<{ salesperson?: Salesperson | null, onSav
     );
 };
 
-export const AddUserForm: React.FC<{ onSave: (data: any) => void, onCancel: () => void }> = ({ onSave, onCancel }) => {
-    const [d, setD] = useState({ fullName: '', email: '', password: '', role: 'sales' });
+export const UserForm: React.FC<{ 
+    initialData?: { fullName: string, email: string, role: string, id?: string }, 
+    onSave: (data: any) => void, 
+    onCancel: () => void,
+    isEdit?: boolean,
+    onResetPassword?: (newPass: string) => Promise<void>
+}> = ({ initialData, onSave, onCancel, isEdit = false, onResetPassword }) => {
+    const [d, setD] = useState({ 
+        fullName: initialData?.fullName || '', 
+        email: initialData?.email || '', 
+        password: '', 
+        role: initialData?.role || 'sales' 
+    });
+    const [showPasswordReset, setShowPasswordReset] = useState(false);
+    const [newPassword, setNewPassword] = useState('');
+    const { addToast } = useToast();
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        onSave(d);
+    }
+
+    const handlePasswordReset = async () => {
+        if (!newPassword) return;
+        if (onResetPassword) {
+            await onResetPassword(newPassword);
+            setShowPasswordReset(false);
+            setNewPassword('');
+            addToast('เปลี่ยนรหัสผ่านสำเร็จ', 'success');
+        }
+    }
+
     return (
-        <form onSubmit={(e) => { e.preventDefault(); onSave(d); }} className="space-y-4">
-            <input value={d.fullName} onChange={e=>setD({...d, fullName: e.target.value})} placeholder="ชื่อ-นามสกุล" className="w-full p-2.5 border rounded-xl" required />
-            <input value={d.email} onChange={e=>setD({...d, email: e.target.value})} placeholder="อีเมล" className="w-full p-2.5 border rounded-xl" required />
-            <input value={d.password} onChange={e=>setD({...d, password: e.target.value})} placeholder="รหัสผ่าน" type="password" className="w-full p-2.5 border rounded-xl" required />
-            <select value={d.role} onChange={e=>setD({...d, role: e.target.value})} className="w-full p-2.5 border rounded-xl">
-                <option value="sales">Sell (ฝ่ายขาย)</option>
-                <option value="after_care">CRM (หลังการขาย)</option>
-                <option value="admin">Admin (ผู้ดูแล)</option>
-            </select>
-            <div className="flex justify-end gap-2 pt-4">
-                <Button onClick={onCancel} variant="secondary">ยกเลิก</Button>
-                <Button type="submit" variant="primary">สร้างผู้ใช้</Button>
-            </div>
-        </form>
+        <div className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">ชื่อ-นามสกุล</label>
+                    <input value={d.fullName} onChange={e=>setD({...d, fullName: e.target.value})} className="w-full p-2.5 border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-sky-100" required />
+                </div>
+                <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">อีเมล {isEdit && '(ไม่สามารถแก้ไข)'}</label>
+                    <input value={d.email} onChange={e=>setD({...d, email: e.target.value})} className={`w-full p-2.5 border rounded-xl ${isEdit ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-slate-50'}`} disabled={isEdit} required />
+                </div>
+                
+                {!isEdit && (
+                     <div>
+                        <label className="block text-xs font-semibold text-slate-500 mb-1">รหัสผ่าน</label>
+                        <input value={d.password} onChange={e=>setD({...d, password: e.target.value})} type="password" className="w-full p-2.5 border rounded-xl bg-slate-50" required={!isEdit} />
+                    </div>
+                )}
+
+                <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">ตำแหน่ง (Role)</label>
+                    <select value={d.role} onChange={e=>setD({...d, role: e.target.value})} className="w-full p-2.5 border rounded-xl bg-slate-50">
+                        <option value="sales">Sell (ฝ่ายขาย)</option>
+                        <option value="after_care">CRM (หลังการขาย)</option>
+                        <option value="admin">Admin (ผู้ดูแล)</option>
+                    </select>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4">
+                    <Button onClick={onCancel} variant="secondary">ยกเลิก</Button>
+                    <Button type="submit" variant="primary">บันทึก</Button>
+                </div>
+            </form>
+
+            {isEdit && onResetPassword && (
+                <div className="border-t border-slate-100 pt-4 mt-4">
+                    <button 
+                        type="button"
+                        onClick={() => setShowPasswordReset(!showPasswordReset)}
+                        className="text-xs text-slate-500 hover:text-sky-600 underline"
+                    >
+                        {showPasswordReset ? 'ยกเลิกการเปลี่ยนรหัสผ่าน' : 'ต้องการเปลี่ยนรหัสผ่าน?'}
+                    </button>
+                    
+                    {showPasswordReset && (
+                        <div className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                             <label className="block text-xs font-semibold text-slate-500 mb-1">รหัสผ่านใหม่</label>
+                             <div className="flex gap-2">
+                                 <input 
+                                    type="password" 
+                                    value={newPassword}
+                                    onChange={(e) => setNewPassword(e.target.value)}
+                                    className="flex-1 p-2 border rounded-lg text-sm"
+                                    placeholder="กรอกรหัสใหม่"
+                                 />
+                                 <Button onClick={handlePasswordReset} variant="secondary" className="px-3 py-1 text-xs whitespace-nowrap">ยืนยัน</Button>
+                             </div>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
     );
+};
+
+export const AddUserForm: React.FC<{ onSave: (data: any) => void, onCancel: () => void }> = ({ onSave, onCancel }) => {
+    // Wrapper for new UserForm to maintain backward compatibility if needed, or replace usage
+    return <UserForm onSave={onSave} onCancel={onCancel} />;
 };
 
 export const ChangePasswordForm: React.FC<{ onSave: (p: string) => void, onCancel: () => void }> = ({ onSave, onCancel }) => {
