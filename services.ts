@@ -21,8 +21,8 @@ export const statusColors: { [key in LeadStatus]: string } = {
 export const leadStatuses = Object.values(LeadStatus);
 
 // --- LINE NOTIFICATION CONFIG ---
-const LINE_CHANNEL_ACCESS_TOKEN = 'P3MUI6dxMEaFKR8LYT0GbSZBcbV3bjvOTWA/tgTistte1TOXvagwyf6XidI/ZOy3NwIGaEXIO7xbzIxESiKXUdI39CBXH7GjTM4xlVk0x0DpZYVml3W75mFF05PUWvdJ8EnCEsDY87ihcLBxHf876QdB04t89/1O/w1cDnyilFU=';
-const LINE_TARGET_ID = 'Cfe28bbc3dacaaf3d7981625b99f80c7d'; // Group ID
+const LINE_CHANNEL_ACCESS_TOKEN = 'e20qbzxHeMLNx4jwb1ShKECAg2ThLxB0clnmduXWkwukg7cPGHlQBIrn4R6hWyTcAyl3OSBYAyERqI+95AB/pjBdrH6AF7dHEmxYjrAiJZTN81DwkfOSUGLlzZlZzuPGyySBkb6Or62S9QLSjcE88QdB04t89/1O/w1cDnyilFU=';
+const LINE_TARGET_ID = 'Ce6327243e2bcb6b1c16ca86f0f14bc2e'; // Group ID
 const APP_URL = 'https://lead-application-theta.vercel.app/';
 
 // --- SQL SCRIPTS (Exported for UI use) ---
@@ -95,6 +95,29 @@ create table if not exists public.programs (
 );
 alter table public.programs enable row level security;
 
+-- 2.5 Create RLS Policies (CRITICAL FOR LOGIN)
+-- Profiles Policies
+DROP POLICY IF EXISTS "Admins can manage all profiles." ON public.profiles;
+DROP POLICY IF EXISTS "Users can view their own profile." ON public.profiles;
+DROP POLICY IF EXISTS "Users can update their own profile." ON public.profiles;
+CREATE POLICY "Admins can manage all profiles." ON public.profiles FOR ALL USING ( (select role from public.profiles where id = auth.uid()) = 'admin' );
+CREATE POLICY "Users can view their own profile." ON public.profiles FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "Users can update their own profile." ON public.profiles FOR UPDATE USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+
+-- Leads Policies (Simplified)
+DROP POLICY IF EXISTS "Enable read access for all users" ON public.leads;
+DROP POLICY IF EXISTS "Enable insert for authenticated users only" ON public.leads;
+DROP POLICY IF EXISTS "Enable update for users based on email" ON public.leads;
+DROP POLICY IF EXISTS "Enable delete for users based on email" ON public.leads;
+CREATE POLICY "Enable read access for all users" ON public.leads FOR SELECT USING (true);
+CREATE POLICY "Enable insert for authenticated users only" ON public.leads FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+CREATE POLICY "Enable update for users based on email" ON public.leads FOR UPDATE USING (auth.role() = 'authenticated');
+CREATE POLICY "Enable delete for users based on email" ON public.leads FOR DELETE USING (auth.role() = 'authenticated');
+
+-- Programs Policies
+DROP POLICY IF EXISTS "Everyone can read programs" ON public.programs;
+CREATE POLICY "Everyone can read programs" ON public.programs FOR SELECT USING (true);
+
 -- 3. Create Function admin_create_user
 DROP FUNCTION IF EXISTS admin_create_user(text, text, text, text);
 CREATE OR REPLACE FUNCTION admin_create_user(email_input text, password_input text, full_name_input text, role_input text)
@@ -129,12 +152,23 @@ BEGIN
 END;
 $$;
 
--- 4. Create Default Admin
+-- 4. FIX: Backfill missing profiles for existing auth users
+INSERT INTO public.profiles (id, email, full_name, role, status, last_active)
+SELECT 
+    id, 
+    email, 
+    COALESCE(raw_user_meta_data->>'full_name', 'No Name'), 
+    COALESCE(raw_user_meta_data->>'role', 'sales'), 
+    'offline', 
+    now()
+FROM auth.users
+WHERE id NOT IN (SELECT id FROM public.profiles)
+ON CONFLICT (id) DO NOTHING;
+
+-- 5. Create Default Admin
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM auth.users WHERE email = 'admin@admin') THEN
-        PERFORM admin_create_user('admin@admin', 'admin123', 'Super Admin', 'admin');
-    END IF;
+    PERFORM admin_create_user('admin@admin', 'admin123', 'Super Admin', 'admin');
 END $$;
 `;
 
@@ -310,6 +344,18 @@ END $$;
 `;
 
 // --- Data Services ---
+
+// Helper function to check system health (missing tables)
+export const checkSystemHealth = async () => {
+    // Check if profiles table exists by trying to fetch a single record (limit 0 to be cheap)
+    // If table is missing, Supabase/PostgREST usually returns code '42P01' (undefined_table)
+    const { error } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
+    
+    if (error && (error.code === '42P01' || error.message.includes('does not exist'))) {
+        return false;
+    }
+    return true;
+};
 
 // Helper function to check online status (5 min threshold)
 export const isUserOnline = (user: { status?: string | null, last_active?: string | null }): boolean => {
@@ -545,7 +591,6 @@ export const getDashboardStats = async (role: 'admin' | 'sales', userId?: string
         return {
             totalLeads: salesLeads.length,
             uncalledLeads: salesLeads.filter(l => l.status === LeadStatus.Uncalled).length,
-            wonLeads: wonLeads.length,
             monthlySales: monthlySales,
             conversionRate: salesLeads.length > 0 ? Math.round((wonLeads.length / salesLeads.length) * 100) : 0
         }
@@ -1191,6 +1236,29 @@ export const runConnectionTest = async (onProgress: (result: ConnectionTestResul
                     details: "หากพบ Error 'provider_id' ให้คัดลอก SQL ด้านล่างไปรันใหม่ใน Supabase", 
                     fix: SQL_ADMIN_CREATE_USER 
                 };
+            }
+        },
+        {
+            name: "12. ตรวจสอบคอลัมน์ Status",
+            requiresAuth: false,
+            action: async () => {
+                const { error } = await supabase.from('profiles').select('status').limit(1);
+                 return {
+                    success: !error,
+                    details: error ? "ไม่พบคอลัมน์ status" : "คอลัมน์ status ปกติ",
+                    fix: SQL_ADD_LAST_ACTIVE
+                 }
+            }
+        },
+        {
+            name: "13. ตรวจสอบและแก้ไข Role Constraint",
+            requiresAuth: false,
+            action: async () => {
+                return {
+                    success: true,
+                    details: "หากเพิ่มผู้ใช้ไม่ได้เนื่องจาก Role Constraint",
+                    fix: SQL_FIX_ROLE_CONSTRAINT
+                }
             }
         }
     ];

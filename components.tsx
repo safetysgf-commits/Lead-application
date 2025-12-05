@@ -131,10 +131,10 @@ export const ChevronRightIcon: React.FC<{ className?: string }> = ({ className }
 // --- Layout Components ---
 
 const NotificationBell: React.FC<{ count: number }> = ({ count }) => (
-    <div className="relative">
-        <BellIcon className="w-7 h-7 text-slate-500" />
+    <div className="relative group cursor-pointer">
+        <BellIcon className={`w-7 h-7 transition-colors duration-300 ${count > 0 ? 'text-yellow-500 animate-[bounce_1s_ease-in-out_infinite]' : 'text-slate-500 group-hover:text-slate-700'}`} />
         {count > 0 && (
-            <span className="absolute -top-1 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-medium text-white ring-2 ring-white">
+            <span className="absolute -top-1 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white ring-2 ring-white shadow-sm transform scale-110">
                 {count}
             </span>
         )}

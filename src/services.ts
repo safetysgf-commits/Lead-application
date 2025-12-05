@@ -308,6 +308,18 @@ END $$;
 
 // --- Data Services ---
 
+// Helper function to check system health (missing tables)
+export const checkSystemHealth = async () => {
+    // Check if profiles table exists by trying to fetch a single record (limit 0 to be cheap)
+    // If table is missing, Supabase/PostgREST usually returns code '42P01' (undefined_table)
+    const { error } = await supabase.from('profiles').select('id', { count: 'exact', head: true });
+    
+    if (error && (error.code === '42P01' || error.message.includes('does not exist'))) {
+        return false;
+    }
+    return true;
+};
+
 // Helper function to check online status (5 min threshold)
 export const isUserOnline = (user: { status?: string | null, last_active?: string | null }): boolean => {
     if (user.status === 'offline') return false;

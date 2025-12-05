@@ -9,7 +9,7 @@ import {
     adminCreateUser, updateUserPassword, deleteSalesperson, getSalesTeamPerformance, getBirthdays,
     SQL_CREATE_DEFAULT_ADMIN,
     SQL_ADMIN_CREATE_USER, isUserOnline, updateSalesperson,
-    SQL_FIX_ROLE_CONSTRAINT
+    SQL_FIX_ROLE_CONSTRAINT, checkSystemHealth
 } from './services.ts';
 import {
     Card, StatCard, Button, Modal, Spinner, LeadForm, ActivityTimeline, 
@@ -35,9 +35,15 @@ const getErrorMessage = (error: any): string => {
     }
 };
 
+interface IAuthContext {
+    user: User | null;
+    login: (email: string, pass: string) => Promise<void>;
+    logout: () => Promise<void>;
+}
+
 // --- Auth ---
 export const LoginPage: React.FC = () => {
-    const auth = useContext(AuthContext);
+    const auth = useContext(AuthContext) as IAuthContext | null;
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -338,7 +344,7 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (n:number)=
 
             <Card className="p-4" noPadding>
                 <div className="p-4 border-b border-slate-100 flex gap-2 overflow-x-auto">
-                    {['All', ...Object.values(LeadStatus)].map(s => (
+                    {['All', ...Object.values(LeadStatus)].map((s: string) => (
                         <button 
                             key={s} 
                             onClick={() => setFilterStatus(s)}

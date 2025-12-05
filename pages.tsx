@@ -9,7 +9,7 @@ import {
     adminCreateUser, updateUserPassword, deleteSalesperson, getSalesTeamPerformance, getBirthdays,
     SQL_CREATE_DEFAULT_ADMIN,
     SQL_ADMIN_CREATE_USER, isUserOnline, updateSalesperson,
-    SQL_FIX_ROLE_CONSTRAINT
+    SQL_FIX_ROLE_CONSTRAINT, checkSystemHealth
 } from './services.ts';
 import {
     Card, StatCard, Button, Modal, Spinner, LeadForm, ActivityTimeline, 
@@ -35,17 +35,25 @@ const getErrorMessage = (error: any): string => {
     }
 };
 
+interface IAuthContext {
+    user: User | null;
+    login: (email: string, pass: string) => Promise<void>;
+    logout: () => Promise<void>;
+}
+
 // --- Auth ---
 export const LoginPage: React.FC = () => {
-    const auth = useContext(AuthContext);
+    const auth = useContext(AuthContext) as IAuthContext | null;
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const { addToast } = useToast();
     const [showTest, setShowTest] = useState(false);
+    const [dbError, setDbError] = useState(false);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        setDbError(false);
         if (auth?.login) {
             setIsLoading(true);
             try {
@@ -56,11 +64,10 @@ export const LoginPage: React.FC = () => {
                 
                 // Detect schema error and guide user to fix
                 if (msg.includes("Database error querying schema") || msg.includes("relation") || msg.includes("profiles")) {
-                    addToast("ไม่พบฐานข้อมูล! กรุณารัน Script '0. One-Click Setup' ในหน้าต่างที่เด้งขึ้นมา", 'error');
-                    setShowTest(true);
+                    addToast("ไม่พบข้อมูลโปรไฟล์ผู้ใช้ (Missing Profiles)", 'error');
+                    setDbError(true); // Trigger the manual repair button
                 } else if (msg.includes("Invalid login credentials")) {
-                    addToast("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (หากเพิ่งเริ่มระบบ ให้รัน Script Setup)", 'error');
-                    setShowTest(true);
+                    addToast("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", 'error');
                 } else {
                     addToast(msg, 'error');
                 }
@@ -77,6 +84,16 @@ export const LoginPage: React.FC = () => {
                     <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Lead CRM</h1>
                     <p className="text-slate-400 mt-2">ลงชื่อเข้าใช้เพื่อเริ่มต้น</p>
                 </div>
+                
+                {dbError && (
+                    <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl text-center">
+                        <p className="text-xs text-red-600 mb-2">เกิดข้อผิดพลาด: ไม่พบข้อมูลผู้ใช้ในระบบ (Profiles Table Error)</p>
+                        <Button onClick={() => setShowTest(true)} className="w-full text-xs" variant="danger">
+                            🔧 คลิกเพื่อซ่อมแซมระบบ (Setup)
+                        </Button>
+                    </div>
+                )}
+
                 <form onSubmit={handleLogin} className="space-y-5">
                     <div>
                         <label className="block text-sm font-semibold text-slate-600 mb-1.5">อีเมล</label>
@@ -338,7 +355,7 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (n:number)=
 
             <Card className="p-4" noPadding>
                 <div className="p-4 border-b border-slate-100 flex gap-2 overflow-x-auto">
-                    {['All', ...Object.values(LeadStatus)].map(s => (
+                    {['All', ...Object.values(LeadStatus)].map((s: string) => (
                         <button 
                             key={s} 
                             onClick={() => setFilterStatus(s)}
@@ -741,7 +758,7 @@ export const SalesTeamPage: React.FC = () => {
                     <div className="space-y-6">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <StatCard title="Lead ทั้งหมด" value={kpiStats.totalLeads} icon={<UsersIcon className="text-slate-500"/>} colorClass="bg-slate-50" />
-                            <StatCard title="สำเร็จ (Won)" value={kpiStats.wonLeads || 0} icon={<CheckCircleIcon className="text-green-500"/>} colorClass="bg-green-50" />
+                            <StatCard title="รอติดตาม" value={kpiStats.uncalledLeads} icon={<PhoneIcon className="text-orange-500"/>} colorClass="bg-orange-50" />
                             <StatCard title="ยอดขาย (เดือนนี้)" value={`฿${kpiStats.monthlySales.toLocaleString()}`} icon={<CheckCircleIcon className="text-green-500"/>} colorClass="bg-green-50" />
                             <StatCard title="Conversion Rate" value={`${kpiStats.conversionRate}%`} icon={<ChartBarIcon className="text-blue-500"/>} colorClass="bg-blue-50" />
                         </div>
@@ -859,7 +876,7 @@ export const CalendarPage: React.FC<{ user: User }> = ({ user }) => {
                                     className={`text-[10px] p-1 rounded cursor-pointer truncate shadow-sm hover:opacity-80 ${bgClass}`}
                                     title={event.title}
                                 >
-                                    {isBirthday ? '🎂 ' : isBooking ? '✅ ' : '📅 '}{event.title}
+                                    {isBirthday ? '🎂 ' : ''}{event.title}
                                 </div>
                             );
                         })}
