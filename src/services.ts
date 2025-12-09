@@ -1,3 +1,4 @@
+
 import { LeadStatus, ConnectionTestResult, Database, Salesperson, Lead, LeadActivity, Role, Program, SalespersonWithStats } from './types.ts';
 import { supabase } from './supabaseClient.ts';
 import jsPDF from 'jspdf';
@@ -29,6 +30,9 @@ const APP_URL = 'https://lead-application-theta.vercel.app/';
 export const SQL_ONE_CLICK_SETUP = `
 -- 1. Enable pgcrypto
 create extension if not exists "pgcrypto";
+
+-- 1.1 Grant usage on schema to ensure access
+GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
 
 -- 2. Create Tables
 create table if not exists public.profiles (
@@ -94,6 +98,11 @@ create table if not exists public.programs (
 );
 alter table public.programs enable row level security;
 
+-- 2.2 Explicit Grants for Tables
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+
 -- 3. Create Function admin_create_user
 DROP FUNCTION IF EXISTS admin_create_user(text, text, text, text);
 CREATE OR REPLACE FUNCTION admin_create_user(email_input text, password_input text, full_name_input text, role_input text)
@@ -128,7 +137,43 @@ BEGIN
 END;
 $$;
 
--- 4. Create Default Admin
+-- 2.5 Create RLS Policies (CRITICAL FOR LOGIN)
+-- Profiles Policies
+DROP POLICY IF EXISTS "Admins can manage all profiles." ON public.profiles;
+DROP POLICY IF EXISTS "Users can view their own profile." ON public.profiles;
+DROP POLICY IF EXISTS "Users can update their own profile." ON public.profiles;
+CREATE POLICY "Admins can manage all profiles." ON public.profiles FOR ALL USING ( (select role from public.profiles where id = auth.uid()) = 'admin' );
+CREATE POLICY "Users can view their own profile." ON public.profiles FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "Users can update their own profile." ON public.profiles FOR UPDATE USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+
+-- Leads Policies (Simplified)
+DROP POLICY IF EXISTS "Enable read access for all users" ON public.leads;
+DROP POLICY IF EXISTS "Enable insert for authenticated users only" ON public.leads;
+DROP POLICY IF EXISTS "Enable update for users based on email" ON public.leads;
+DROP POLICY IF EXISTS "Enable delete for users based on email" ON public.leads;
+CREATE POLICY "Enable read access for all users" ON public.leads FOR SELECT USING (true);
+CREATE POLICY "Enable insert for authenticated users only" ON public.leads FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+CREATE POLICY "Enable update for users based on email" ON public.leads FOR UPDATE USING (auth.role() = 'authenticated');
+CREATE POLICY "Enable delete for users based on email" ON public.leads FOR DELETE USING (auth.role() = 'authenticated');
+
+-- Programs Policies
+DROP POLICY IF EXISTS "Everyone can read programs" ON public.programs;
+CREATE POLICY "Everyone can read programs" ON public.programs FOR SELECT USING (true);
+
+-- 4. FIX: Backfill missing profiles for existing auth users
+INSERT INTO public.profiles (id, email, full_name, role, status, last_active)
+SELECT 
+    id, 
+    email, 
+    COALESCE(raw_user_meta_data->>'full_name', 'No Name'), 
+    COALESCE(raw_user_meta_data->>'role', 'sales'), 
+    'offline', 
+    now()
+FROM auth.users
+WHERE id NOT IN (SELECT id FROM public.profiles)
+ON CONFLICT (id) DO NOTHING;
+
+-- 5. Create Default Admin
 DO $$
 BEGIN
     PERFORM admin_create_user('admin@admin', 'admin123', 'Super Admin', 'admin');
@@ -1199,6 +1244,29 @@ export const runConnectionTest = async (onProgress: (result: ConnectionTestResul
                     details: "หากพบ Error 'provider_id' ให้คัดลอก SQL ด้านล่างไปรันใหม่ใน Supabase", 
                     fix: SQL_ADMIN_CREATE_USER 
                 };
+            }
+        },
+        {
+            name: "12. ตรวจสอบคอลัมน์ Status",
+            requiresAuth: false,
+            action: async () => {
+                const { error } = await supabase.from('profiles').select('status').limit(1);
+                 return {
+                    success: !error,
+                    details: error ? "ไม่พบคอลัมน์ status" : "คอลัมน์ status ปกติ",
+                    fix: SQL_ADD_LAST_ACTIVE
+                 }
+            }
+        },
+        {
+            name: "13. ตรวจสอบและแก้ไข Role Constraint",
+            requiresAuth: false,
+            action: async () => {
+                return {
+                    success: true,
+                    details: "หากเพิ่มผู้ใช้ไม่ได้เนื่องจาก Role Constraint",
+                    fix: SQL_FIX_ROLE_CONSTRAINT
+                }
             }
         }
     ];

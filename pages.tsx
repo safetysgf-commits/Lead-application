@@ -358,7 +358,7 @@ export const LeadsPage: React.FC<{ user: User, setNotificationCount: (n:number)=
                     {['All', ...Object.values(LeadStatus)].map((s: string) => (
                         <button 
                             key={s} 
-                            onClick={() => setFilterStatus(s)}
+                            onClick={() => setFilterStatus(s as any)}
                             className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filterStatus === s ? 'bg-[#4DA6FF] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                         >
                             {s}

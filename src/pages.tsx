@@ -49,9 +49,11 @@ export const LoginPage: React.FC = () => {
     const [isLoading, setIsLoading] = useState(false);
     const { addToast } = useToast();
     const [showTest, setShowTest] = useState(false);
+    const [dbError, setDbError] = useState(false);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        setDbError(false);
         if (auth?.login) {
             setIsLoading(true);
             try {
@@ -62,11 +64,12 @@ export const LoginPage: React.FC = () => {
                 
                 // Detect schema error and guide user to fix
                 if (msg.includes("Database error querying schema") || msg.includes("relation") || msg.includes("profiles")) {
+                    setDbError(true);
                     addToast("ไม่พบฐานข้อมูล! กรุณารัน Script '0. One-Click Setup' ในหน้าต่างที่เด้งขึ้นมา", 'error');
                     setShowTest(true);
                 } else if (msg.includes("Invalid login credentials")) {
                     addToast("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (หากเพิ่งเริ่มระบบ ให้รัน Script Setup)", 'error');
-                    setShowTest(true);
+                    setDbError(true); // Optional: also show setup just in case they need to create admin
                 } else {
                     addToast(msg, 'error');
                 }
@@ -83,6 +86,17 @@ export const LoginPage: React.FC = () => {
                     <h1 className="text-3xl font-bold text-slate-800 tracking-tight">Lead CRM</h1>
                     <p className="text-slate-400 mt-2">ลงชื่อเข้าใช้เพื่อเริ่มต้น</p>
                 </div>
+                
+                {dbError && (
+                    <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl text-center animate-pulse">
+                        <p className="text-xs text-red-600 mb-2 font-bold">⚠️ ตรวจพบปัญหาฐานข้อมูล</p>
+                        <p className="text-[10px] text-red-400 mb-3">ตารางข้อมูลอาจยังไม่ถูกสร้าง หรือถูกลบไป</p>
+                        <Button onClick={() => setShowTest(true)} className="w-full text-xs shadow-red-200" variant="danger">
+                            🔧 คลิกเพื่อติดตั้งระบบ (Setup)
+                        </Button>
+                    </div>
+                )}
+
                 <form onSubmit={handleLogin} className="space-y-5">
                     <div>
                         <label className="block text-sm font-semibold text-slate-600 mb-1.5">อีเมล</label>

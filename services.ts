@@ -1155,7 +1155,7 @@ export const runConnectionTest = async (onProgress: (result: ConnectionTestResul
             name: `${i + 2}. ตรวจสอบตาราง '${table}'`,
             requiresAuth: false,
             action: async () => {
-                const { error } = await supabase.from(table).select('id', { count: 'exact', head: true });
+                const { error } = await supabase.from(table as any).select('id', { count: 'exact', head: true });
                 let fix = undefined;
                 if (error && table === 'programs') {
                     fix = SQL_CREATE_PROGRAMS;
